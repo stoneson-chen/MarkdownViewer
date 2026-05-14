@@ -198,7 +198,8 @@ final class DocumentViewModel {
                 characterCount = content.count
 
                 // Phase 2: full parse on background
-                parseFullAsync(content)
+                let revision = nextParseRevision()
+                Task { await runAsyncParse(content, skipWordCount: false, revision: revision) }
 
                 sidebarDirLoadGeneration += 1
                 let loadGen = sidebarDirLoadGeneration
@@ -266,7 +267,7 @@ final class DocumentViewModel {
 
     // MARK: - Text Change Handling
 
-    /// Called when the editor text changes. Debounces by 150ms.
+    /// Called when the editor text changes. Debounces by 80ms before a full parse.
     func textDidChange(_ newText: String) {
         text = newText
         isDirty = (text != originalText)
@@ -277,17 +278,6 @@ final class DocumentViewModel {
             guard !Task.isCancelled else { return }
             await parseFull(skipWordCount: false)
         }
-    }
-
-    /// Force an immediate parse (e.g., on first load).
-    func parseImmediately() async {
-        await parseFull(skipWordCount: false)
-    }
-
-    /// Async Phase 2 full parse — runs after sync Phase 1 has displayed content.
-    private func parseFullAsync(_ markdown: String) {
-        let revision = nextParseRevision()
-        Task { await runAsyncParse(markdown, skipWordCount: false, revision: revision) }
     }
 
     /// Progressive: sync Phase 1 for instant preview, then async Phase 2.

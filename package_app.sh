@@ -13,9 +13,18 @@ RESOURCES_DIR="${CONTENTS_DIR}/Resources"
 # Clean previous build
 rm -rf "${APP_DIR}"
 
-# Recompile
+# Recompile (clean first: avoids odd incremental state; -j 1 reduces races if multiple
+# frontends touch the same module. If you still see "input file was modified during
+# the build", pause editor auto-save / format-on-save for Sources/ while this runs.)
+echo "🧹 Cleaning SPM build artifacts..."
+swift package clean
+
 echo "🔨 Compiling in release mode..."
-swift build -c release --disable-sandbox
+if ! swift build -c release --disable-sandbox -j 1; then
+    echo "⚠️  First release build failed. Waiting 2s in case an editor was saving Sources/, then retry once..."
+    sleep 2
+    swift build -c release --disable-sandbox -j 1
+fi
 
 # Create .app bundle structure
 mkdir -p "${MACOS_DIR}"

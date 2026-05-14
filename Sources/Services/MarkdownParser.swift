@@ -46,6 +46,9 @@ nonisolated final class MarkdownParser: Sendable {
 
         /// Regex to find potential escaped HTML tags for unescaping
         static let escapedTag = try! NSRegularExpression(pattern: "&lt;(/?)(\\w+)(.*?)&gt;")
+
+        /// Attribute pairs in inline HTML (`key="value"`) for sanitization
+        static let attributesKeyValue = try! NSRegularExpression(pattern: "(\\w+)\\s*=\\s*\"([^\"]*)\"")
     }
 
     // MARK: - Public API
@@ -89,18 +92,14 @@ nonisolated final class MarkdownParser: Sendable {
             var nestedTag: String?
             
             if c == "-" || c == "*" || c == "+" {
-                if Regexes.taskList.firstMatch(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)) != nil {
-                    if let tm = Regexes.taskList.firstMatch(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)) {
-                        let checked = trimmed[Range(tm.range(at: 1), in: trimmed)!] == "x"
-                        let text = processInline(String(trimmed[Range(tm.range(at: 2), in: trimmed)!]))
-                        itemHTML = "<input type=\"checkbox\"\(checked ? " checked" : "") disabled> \(text)"
-                        nestedTag = "ul"
-                    }
-                } else if Regexes.unorderedList.firstMatch(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)) != nil {
-                    if let um = Regexes.unorderedList.firstMatch(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)) {
-                        itemHTML = processInline(String(trimmed[Range(um.range(at: 1), in: trimmed)!]))
-                        nestedTag = "ul"
-                    }
+                if let tm = Regexes.taskList.firstMatch(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)) {
+                    let checked = trimmed[Range(tm.range(at: 1), in: trimmed)!] == "x"
+                    let text = processInline(String(trimmed[Range(tm.range(at: 2), in: trimmed)!]))
+                    itemHTML = "<input type=\"checkbox\"\(checked ? " checked" : "") disabled> \(text)"
+                    nestedTag = "ul"
+                } else if let um = Regexes.unorderedList.firstMatch(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)) {
+                    itemHTML = processInline(String(trimmed[Range(um.range(at: 1), in: trimmed)!]))
+                    nestedTag = "ul"
                 } else { break }
             } else if c.isNumber {
                 if let om = Regexes.orderedList.firstMatch(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)) {
@@ -488,10 +487,7 @@ nonisolated final class MarkdownParser: Sendable {
         let safeList = ["src", "href", "alt", "title", "class", "id", "width", "height", "style"]
         var sanitized = ""
         
-        // Simple but effective attribute parser
-        let pattern = "(\\w+)\\s*=\\s*\"([^\"]*)\""
-        let regex = try! NSRegularExpression(pattern: pattern)
-        let matches = regex.matches(in: raw, range: NSRange(raw.startIndex..., in: raw))
+        let matches = Regexes.attributesKeyValue.matches(in: raw, range: NSRange(raw.startIndex..., in: raw))
         
         for m in matches {
             guard let keyRange = Range(m.range(at: 1), in: raw),
@@ -529,7 +525,7 @@ nonisolated final class MarkdownParser: Sendable {
         }
     }
 
-    func countWords(in text: String) -> Int {
+    private func countWords(in text: String) -> Int {
         var count = 0
         text.enumerateSubstrings(in: text.startIndex..., options: [.byWords, .substringNotRequired]) { _, _, _, _ in
             count += 1

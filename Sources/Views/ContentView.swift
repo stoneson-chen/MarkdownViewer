@@ -23,9 +23,6 @@ struct ContentView: View {
             guard !hasLoadedInitialContent else { return }
             hasLoadedInitialContent = true
             await viewModel.loadInitialContent()
-            if viewModel.fileURL != nil {
-                columnVisibility = .all
-            }
         }
         .onAppear {
             AppDelegate.registerWindow(

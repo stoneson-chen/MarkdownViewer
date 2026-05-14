@@ -3,6 +3,7 @@ import SwiftUI
 /// Beautiful About window showcasing app info and developer credits.
 struct AboutView: View {
     @Environment(\.dismiss) private var dismiss
+    @State private var showPrivacy = false
 
     private let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
     private let buildNumber = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
@@ -155,23 +156,24 @@ struct AboutView: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
 
-                // MIT badge
-                HStack(spacing: 4) {
-                    Image(systemName: "checkmark.seal.fill")
-                        .font(.system(size: 10))
-                    Text("MIT License")
-                        .font(.system(size: 11, weight: .medium))
+                // Privacy link
+                Button {
+                    showPrivacy = true
+                } label: {
+                    Text("隐私政策")
+                        .font(.system(size: 12))
+                        .foregroundColor(.accentColor)
                 }
-                .foregroundColor(.secondary)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 4)
-                .background(.quaternary.opacity(0.5), in: Capsule())
+                .buttonStyle(.plain)
                 .padding(.bottom, 20)
             }
         }
         .frame(width: 380)
         .background(.background)
         .clipShape(RoundedRectangle(cornerRadius: 12))
+        .sheet(isPresented: $showPrivacy) {
+            PrivacyView()
+        }
     }
 
     // MARK: - Components
