@@ -1,0 +1,29 @@
+# SPM build artifacts
+.build/
+
+# macOS
+.DS_Store
+
+# Built app bundle
+MarkdownViewer.app/
+
+# Scratch / test files
+scratch/
+
+# Logs
+*.log
+
+# Generated / temporary files
+.preview.html
+screenshot_final.png
+en_keys.txt
+existing_keys.txt
+required_keys.txt
+zh_keys.txt
+
+# Empty stale directories at repo root (real code is in Sources/)
+/App/
+/Assets.xcassets/
+/Models/
+/Services/
+/Views/

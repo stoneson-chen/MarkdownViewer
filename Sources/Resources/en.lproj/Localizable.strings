@@ -1,0 +1,97 @@
+/* 
+  Localizable.strings
+  MarkdownViewer
+*/
+
+// Outline
+"outline.title" = "Outline";
+"outline.empty.title" = "No Outline";
+"outline.empty.description" = "Add # headings to the document to generate an outline.";
+
+// Sidebar Tabs
+"sidebar.files" = "Files";
+"sidebar.outline" = "Outline";
+
+// Split View
+"split.horizontal" = "Horizontal Split";
+"split.vertical" = "Vertical Split";
+
+// Menus
+"menu.open" = "Open File...";
+"menu.save" = "Save";
+"menu.saveAs" = "Save As...";
+"menu.previewMode" = "Switch to Preview Mode";
+"menu.editMode" = "Switch to Edit Mode";
+"menu.toggleSplit" = "Toggle Split Orientation";
+"menu.format" = "Format";
+"menu.bold" = "Bold";
+"menu.italic" = "Italic";
+"menu.code" = "Inline Code";
+"menu.h1" = "Heading 1";
+"menu.h2" = "Heading 2";
+"menu.h3" = "Heading 3";
+"menu.link" = "Insert Link";
+"menu.image" = "Insert Image";
+"menu.about" = "About MarkdownViewer";
+
+// About View
+"about.name" = "MarkdownViewer";
+"about.tagline" = "Elegant Reading, Exceptional Experience";
+"about.version" = "Version";
+"about.build" = "Build";
+"about.engine" = "Engine";
+"about.developer" = "Developer";
+"about.author" = "Chen Xinxing";
+"about.copyright" = "Copyright © 2026 Chen Xinxing. All rights reserved.";
+
+// Settings View
+"settings.general" = "General";
+"settings.appearance" = "Appearance";
+"settings.theme" = "Theme";
+"settings.themeMode" = "Display Mode";
+"settings.theme.system" = "System";
+"settings.theme.light" = "Light";
+"settings.theme.dark" = "Dark";
+"settings.customCSS" = "Custom Styles";
+"settings.customCSSDesc" = "Associate Custom CSS Stylesheet (.css)";
+"settings.customCSSNone" = "No Path Specified";
+"settings.customCSSRemove" = "Remove Custom Style";
+"settings.customCSSTip" = "Tip: Custom styles will override default styles. If a CSS file with the same name exists in the document directory, it will take priority.";
+"settings.sectionFile" = "File";
+"settings.comingSoon" = "More general settings coming soon...";
+
+// Toolbar Tooltips
+"toolbar.toggleSidebar" = "Toggle Sidebar (⌘S)";
+"toolbar.openFile" = "Open File (⌘O)";
+"toolbar.editMode" = "Switch to Edit Mode (⌘E)";
+"toolbar.previewMode" = "Switch to Preview Mode (⌘E)";
+"toolbar.toggleSplit" = "Toggle Split Orientation (⌘\\)";
+"toolbar.dirtyIndicator" = "Document modified, unsaved";
+
+// Common
+"common.error" = "Error";
+"common.ok" = "OK";
+
+// Dialogs
+"dialog.openFile" = "Choose Markdown File";
+"dialog.chooseFolder" = "Choose a folder containing Markdown files";
+
+// Errors
+"error.open" = "Failed to open file: ";
+"error.save" = "Failed to save: ";
+"error.saveAs" = "Failed to save as: ";
+
+// Sidebar
+"sidebar.title" = "Files";
+"sidebar.openFolder" = "Open Folder";
+"sidebar.noFolder" = "No Folder Open";
+"sidebar.openFolderButton" = "Open Folder...";
+
+// Status Bar
+"status.lines" = "Lines";
+"status.words" = "Words";
+"status.totalCharacters" = "Total Characters: ";
+"status.edit" = "Edit";
+"status.preview" = "Preview";
+"status.unsaved" = "Unsaved";
+"status.saved" = "Saved";

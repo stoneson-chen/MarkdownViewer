@@ -1,0 +1,98 @@
+/* 
+  Localizable.strings
+  MarkdownViewer
+*/
+
+// Outline
+"outline.title" = "文章大纲";
+"outline.empty.title" = "暂无目录";
+"outline.empty.description" = "在文档中添加 # 标题即可生成";
+
+// Sidebar Tabs
+"sidebar.files" = "文件";
+"sidebar.outline" = "大纲";
+
+// Split View
+"split.horizontal" = "左右分栏";
+"split.vertical" = "上下分栏";
+
+// Menus
+"menu.open" = "打开文件…";
+"menu.save" = "保存";
+"menu.saveAs" = "另存为…";
+"menu.previewMode" = "切换到预览模式";
+"menu.editMode" = "切换到编辑模式";
+"menu.toggleSplit" = "切换分栏方向";
+"menu.format" = "格式";
+"menu.bold" = "粗体";
+"menu.italic" = "斜体";
+"menu.code" = "行内代码";
+"menu.h1" = "标题 1";
+"menu.h2" = "标题 2";
+"menu.h3" = "标题 3";
+"menu.link" = "插入链接";
+"menu.image" = "插入图片";
+"menu.about" = "关于墨阅";
+
+// About View
+"about.name" = "墨阅";
+"about.tagline" = "墨色生香，阅见不凡";
+"about.version" = "版本";
+"about.build" = "构建";
+"about.engine" = "引擎";
+"about.developer" = "开发者";
+"about.author" = "陈新兴";
+"about.copyright" = "版权所有 © 2026 陈新兴。保留所有权利。";
+
+// Settings View
+"settings.general" = "常规";
+"settings.appearance" = "外观";
+"settings.theme" = "主题";
+"settings.themeMode" = "显示模式";
+"settings.theme.system" = "跟随系统";
+"settings.theme.light" = "浅色模式";
+"settings.theme.dark" = "深色模式";
+"settings.customCSS" = "自定义样式";
+"settings.customCSSDesc" = "关联自定义 CSS 样式表 (.css)";
+"settings.customCSSNone" = "未指定路径";
+"settings.customCSSRemove" = "移除自定义样式";
+"settings.customCSSTip" = "提示：自定义样式将覆盖默认样式。如果文档所在目录有同名 CSS 文件，将优先加载。";
+"settings.sectionFile" = "文件";
+"settings.comingSoon" = "更多通用设置即将推出…";
+
+// Toolbar Tooltips
+"toolbar.toggleSidebar" = "切换侧边栏 (⌘S)";
+"toolbar.openFile" = "打开文件 (⌘O)";
+"toolbar.editMode" = "切换到编辑模式 (⌘E)";
+"toolbar.previewMode" = "切换到预览模式 (⌘E)";
+"toolbar.toggleSplit" = "切换分栏方向 (⌘\\)";
+"toolbar.dirtyIndicator" = "文档已修改，未保存";
+
+// Common
+"common.error" = "错误";
+"common.ok" = "确定";
+
+// Dialogs
+"dialog.openFile" = "选择 Markdown 文件";
+"dialog.chooseFolder" = "选择包含 Markdown 文件的文件夹";
+
+// Errors
+"error.open" = "无法打开文件：";
+"error.save" = "保存失败：";
+"error.saveAs" = "另存为失败：";
+
+// Sidebar
+"sidebar.title" = "文件";
+"sidebar.openFolder" = "打开文件夹";
+"sidebar.noFolder" = "未打开文件夹";
+"sidebar.openFolderButton" = "打开文件夹…";
+"sidebar.loading" = "加载目录列表中…";
+
+// Status Bar
+"status.lines" = "行";
+"status.words" = "字";
+"status.totalCharacters" = "字符总数：";
+"status.edit" = "编辑";
+"status.preview" = "预览";
+"status.unsaved" = "未保存";
+"status.saved" = "已保存";
