@@ -7,12 +7,20 @@ import SwiftUI
 final class FileService {
     private(set) var rootNode: FileNode?
     private(set) var folderAccessMessage: String?
+    /// Set when `loadFolder` finishes building the tree for `currentFolderURL`; `nil` while a load is in flight.
+    private(set) var completedFolderLoadURL: URL?
     private(set) var currentFolderURL: URL? {
         didSet { onFolderDidChange?() }
     }
 
     @ObservationIgnored
     var onFolderDidChange: (() -> Void)?
+
+    /// Cancels stale `onLoadFinished` matching for concurrent `loadFolder` calls.
+    @ObservationIgnored
+    private var folderLoadEpoch = 0
+    @ObservationIgnored
+    private var pendingFolderLoadCompletion: (@MainActor () -> Void)?
 
     /// Open a folder and build a file tree filtered to Markdown files.
     func openFolder() {
@@ -27,31 +35,65 @@ final class FileService {
     }
 
     /// Load a folder at the given URL into the sidebar.
-    func loadFolder(at url: URL, selecting selectedFileURL: URL? = nil) {
+    func loadFolder(at url: URL, selecting selectedFileURL: URL? = nil, onLoadFinished: (@MainActor () -> Void)? = nil) {
         let folderURL = url.standardized
         let selectedURL = selectedFileURL?.standardized
         currentFolderURL = folderURL
         rootNode = nil
         folderAccessMessage = nil
+        completedFolderLoadURL = nil
 
-        Task.detached { [folderURL, selectedURL] in
-            let result: Result<FileNode, Error> = Result {
-                try Self.withSecurityScopedAccess(to: folderURL) {
+        folderLoadEpoch += 1
+        let epoch = folderLoadEpoch
+        pendingFolderLoadCompletion = onLoadFinished
+
+        let applyResult = { @MainActor [folderURL, selectedURL, epoch] (result: Result<FileNode, Error>) in
+            guard self.folderLoadEpoch == epoch else { return }
+            guard self.currentFolderURL?.standardized == folderURL else { return }
+            switch result {
+            case .success(let tree):
+                self.rootNode = tree
+            case .failure(let error):
+                self.rootNode = Self.fallbackTree(for: folderURL, selectedFileURL: selectedURL)
+                self.folderAccessMessage = String(localized: "sidebar.folderAccessLimited", bundle: .appResources)
+                    + " " + error.localizedDescription
+            }
+            self.completedFolderLoadURL = folderURL
+            let completion = self.pendingFolderLoadCompletion
+            self.pendingFolderLoadCompletion = nil
+            completion?()
+        }
+
+        if selectedURL != nil {
+            // Security scope from opening a document is started/stopped on the main actor; enumerate on main too.
+            Task { @MainActor in
+                let result: Result<FileNode, Error> = Result {
                     try Self.buildTree(from: folderURL, depth: 0)
                 }
+                applyResult(result)
             }
+        } else {
+            Task.detached { [folderURL] in
+                let result: Result<FileNode, Error> = Result {
+                    try Self.withSecurityScopedAccess(to: folderURL) {
+                        try Self.buildTree(from: folderURL, depth: 0)
+                    }
+                }
 
-            await MainActor.run {
-                switch result {
-                case .success(let tree):
-                    self.rootNode = tree
-                case .failure(let error):
-                    self.rootNode = Self.fallbackTree(for: folderURL, selectedFileURL: selectedURL)
-                    self.folderAccessMessage = String(localized: "sidebar.folderAccessLimited", bundle: .appResources)
-                        + " " + error.localizedDescription
+                await MainActor.run {
+                    applyResult(result)
                 }
             }
         }
+    }
+
+    /// Show the current folder name and at least the selected file before async `loadFolder` completes.
+    func setPlaceholderTree(for folderURL: URL, selectedFile: URL) {
+        let folderURL = folderURL.standardized
+        let selected = selectedFile.standardized
+        currentFolderURL = folderURL
+        folderAccessMessage = nil
+        rootNode = Self.fallbackTree(for: folderURL, selectedFileURL: selected)
     }
 
     /// Read the contents of a file at the given URL.

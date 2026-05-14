@@ -152,6 +152,28 @@ nonisolated final class MarkdownParser: Sendable {
         var i = 0
         var inParagraph = false
 
+        // Front Matter detection: --- ... --- at very start of file
+        if !lines.isEmpty && lines[0].trimmingCharacters(in: .whitespaces) == "---" {
+            var fmLines: [String] = []
+            i = 1
+            while i < lines.count {
+                if lines[i].trimmingCharacters(in: .whitespaces) == "---" {
+                    i += 1; break
+                }
+                fmLines.append(lines[i])
+                i += 1
+            }
+            if !fmLines.isEmpty {
+                let fmContent = fmLines.joined(separator: "\n")
+                htmlParts.append("""
+                <details style='margin-bottom:1.2em;font-size:0.9em'>
+                <summary style='cursor:pointer;color:var(--text-secondary);user-select:none'>📋 文档元数据</summary>
+                <pre style='margin-top:0.5em;padding:12px 16px;background:var(--bg-code);border-radius:6px;font-size:0.85em;line-height:1.5;overflow-x:auto'>\(escapeHTML(fmContent))</pre>
+                </details>
+                """)
+            }
+        }
+
         while i < lines.count {
             let line = lines[i]
             let trimmed = line.trimmingCharacters(in: .whitespaces)

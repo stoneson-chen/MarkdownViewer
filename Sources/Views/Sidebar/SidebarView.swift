@@ -28,17 +28,33 @@ struct SidebarView: View {
             Divider()
 
             // File tree
-            if let root = fileService.rootNode {
+            if let root = fileService.rootNode, let children = root.children, !children.isEmpty {
                 List(selection: $selectedFileURL) {
-                    if let children = root.children {
-                        ForEach(children) { child in
-                            FileTreeNode(node: child)
-                        }
-                    } else {
-                        FileTreeNode(node: root)
+                    ForEach(children) { child in
+                        FileTreeNode(node: child)
                     }
                 }
                 .listStyle(.sidebar)
+            } else if fileService.rootNode != nil {
+                // Tree exists but no markdown files found
+                VStack(spacing: 12) {
+                    Spacer()
+                    Image(systemName: "doc.text.magnifyingglass")
+                        .font(.system(size: 28))
+                        .foregroundStyle(.quaternary)
+                    Text("文件夹中没有 Markdown 文件")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Button {
+                        fileService.loadFolder(at: fileService.currentFolderURL!, selecting: selectedFileURL)
+                    } label: {
+                        Label("刷新", systemImage: "arrow.clockwise")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity)
             } else if fileService.currentFolderURL != nil {
                 VStack(spacing: 12) {
                     Spacer()

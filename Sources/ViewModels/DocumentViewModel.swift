@@ -90,6 +90,11 @@ final class DocumentViewModel {
     private var originalText: String = ""
     private var parseRevision = 0
 
+    /// Bumps when a new on-disk file load should own sidebar security scope / completion.
+    private var sidebarDirLoadGeneration = 0
+    /// Keeps `startAccessingSecurityScopedResource` active on the opened document while the sidebar enumerates its parent directory (see `FileService.loadFolder`).
+    private var retainedSidebarSecurityFileURL: URL?
+
     private enum DefaultsKey {
         static let customCSSBookmark = "userCustomCSSBookmark"
     }
@@ -140,6 +145,7 @@ final class DocumentViewModel {
 
     /// Load the bundled README.md
     func loadDefaultReadme() {
+        endRetainedSidebarSecurityScope()
         if let url = Bundle.appResources.url(forResource: "README", withExtension: "md"),
            let content = try? String(contentsOf: url, encoding: .utf8) {
             text = content
@@ -158,7 +164,7 @@ final class DocumentViewModel {
     func openFile(_ url: URL) {
         let target = url.standardized
         if fileURL?.standardized == target {
-            syncFolderSidebar(for: target)
+            _ = syncFolderSidebar(for: target, parentURL: nil, retainedAccessGeneration: nil)
             return
         }
         if pendingOpenURL == target { return }
@@ -194,7 +200,13 @@ final class DocumentViewModel {
                 // Phase 2: full parse on background
                 parseFullAsync(content)
 
-                syncFolderSidebar(for: target, parentURL: parentURL)
+                sidebarDirLoadGeneration += 1
+                let loadGen = sidebarDirLoadGeneration
+                beginRetainedSidebarSecurityScope(for: target)
+                let scheduled = syncFolderSidebar(for: target, parentURL: parentURL, retainedAccessGeneration: loadGen)
+                if !scheduled {
+                    endRetainedSidebarSecurityScope()
+                }
             } catch {
                 errorMessage = String(localized: "error.open", bundle: .appResources) + ": " + error.localizedDescription
             }
@@ -436,18 +448,59 @@ final class DocumentViewModel {
         return parseRevision
     }
 
-    private func syncFolderSidebar(for fileURL: URL, parentURL: URL? = nil) {
+    @discardableResult
+    private func syncFolderSidebar(
+        for fileURL: URL,
+        parentURL: URL? = nil,
+        retainedAccessGeneration: Int? = nil
+    ) -> Bool {
         let parentURL = (parentURL ?? fileURL.deletingLastPathComponent()).standardized
+
+        // Always create a minimal tree showing at least the current file.
+        // This guarantees the Files tab is never blank, even if async loadFolder fails.
+        if fileService.rootNode == nil || fileService.currentFolderURL?.standardized != parentURL {
+            fileService.setPlaceholderTree(for: parentURL, selectedFile: fileURL)
+        }
 
         if let currentFolder = fileService.currentFolderURL?.standardized {
             let currentPath = currentFolder.path(percentEncoded: false)
             let filePath = fileURL.path(percentEncoded: false)
-            if Self.path(filePath, isInsideOrEqualTo: currentPath), fileService.rootNode != nil {
-                return
+            // Do not skip `loadFolder` while only a placeholder tree is shown (`rootNode != nil` alone is insufficient).
+            if Self.path(filePath, isInsideOrEqualTo: currentPath),
+               fileService.completedFolderLoadURL?.standardized == currentFolder,
+               fileService.rootNode != nil {
+                return false
             }
         }
 
-        fileService.loadFolder(at: parentURL, selecting: fileURL)
+        let onLoadFinished: (@MainActor () -> Void)?
+        if let gen = retainedAccessGeneration {
+            onLoadFinished = { [weak self] in
+                guard let self else { return }
+                guard gen == self.sidebarDirLoadGeneration else { return }
+                self.endRetainedSidebarSecurityScope()
+            }
+        } else {
+            onLoadFinished = nil
+        }
+
+        fileService.loadFolder(at: parentURL, selecting: fileURL, onLoadFinished: onLoadFinished)
+        return true
+    }
+
+    private func beginRetainedSidebarSecurityScope(for fileURL: URL) {
+        endRetainedSidebarSecurityScope()
+        let url = fileURL.standardized
+        if url.startAccessingSecurityScopedResource() {
+            retainedSidebarSecurityFileURL = url
+        }
+    }
+
+    private func endRetainedSidebarSecurityScope() {
+        if let url = retainedSidebarSecurityFileURL {
+            url.stopAccessingSecurityScopedResource()
+            retainedSidebarSecurityFileURL = nil
+        }
     }
 
     private nonisolated static func withSecurityScopedAccess<T>(

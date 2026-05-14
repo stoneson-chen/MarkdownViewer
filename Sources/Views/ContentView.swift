@@ -3,25 +3,9 @@ import SwiftUI
 /// Main content view: preview-only by default, dual-pane when editing.
 struct ContentView: View {
     @State private var viewModel = DocumentViewModel()
-    @State private var sidebarTab: SidebarTab = .outline
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var hasLoadedInitialContent = false
     @State private var commandScope = WindowCommandScope()
-
-    enum SidebarTab: String, CaseIterable, Identifiable {
-        case outline = "sidebar.outline"
-        case files = "sidebar.files"
-        var id: String { rawValue }
-        var icon: String {
-            switch self {
-            case .files: return "folder"
-            case .outline: return "list.bullet.indent"
-            }
-        }
-        var localizedTitle: String {
-            String(localized: String.LocalizationValue(rawValue), bundle: .appResources)
-        }
-    }
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
@@ -66,7 +50,6 @@ struct ContentView: View {
             StatusBar(viewModel: viewModel)
         }
         .onChange(of: viewModel.fileURL) { _, newValue in
-            sidebarTab = .outline
             if newValue != nil {
                 withAnimation {
                     columnVisibility = .all
@@ -78,40 +61,14 @@ struct ContentView: View {
     // MARK: - Sidebar
 
     private var sidebar: some View {
-        VStack(spacing: 0) {
-            // Tab Switcher
-            Picker("", selection: $sidebarTab) {
-                ForEach(SidebarTab.allCases) { tab in
-                    Label(tab.localizedTitle, systemImage: tab.icon).tag(tab)
-                }
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 8)
-
-            Divider()
-
-            // Tab Content
-            ZStack {
-                if sidebarTab == .files {
-                    SidebarView(
-                        fileService: viewModel.fileService,
-                        selectedFileURL: Binding(
-                            get: { viewModel.fileURL },
-                            set: { if let url = $0 { viewModel.openFile(url) } }
-                        )
-                    )
-                } else {
-                    OutlineView(
-                        headings: viewModel.headings,
-                        activeHeadingID: viewModel.activeHeadingID
-                    ) { heading in
-                        viewModel.scrollToHeading(heading, scope: commandScope)
-                    }
-                }
-            }
+        OutlineView(
+            headings: viewModel.headings,
+            activeHeadingID: viewModel.activeHeadingID
+        ) { heading in
+            viewModel.scrollToHeading(heading, scope: commandScope)
         }
         .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 350)
+        .padding(.top, 8)
     }
 
     // MARK: - Detail Content
