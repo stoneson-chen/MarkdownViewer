@@ -4,7 +4,6 @@
 > 
 > 一款为 macOS 精心打造的轻量级原生 Markdown 编辑与实时预览器。
 
-![App Icon](AppIcon.png)
 
 ## ✨ 特性
 
@@ -35,7 +34,7 @@
 
 ```bash
 # 克隆仓库
-git clone https://github.com/your-username/MarkdownViewer.git
+git clone https://github.com/chenxinxing/MarkdownViewer.git
 
 # 编译运行
 cd MarkdownViewer
