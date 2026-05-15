@@ -3,7 +3,8 @@
 
 set -e
 
-PROJECT_DIR="/Users/chenxx/Projects/markdownViewer/MarkdownViewer"
+# Repository root (directory containing this script) — works locally and on CI
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="MarkdownViewer.app"
 APP_DIR="${PROJECT_DIR}/${APP_NAME}"
 CONTENTS_DIR="${APP_DIR}/Contents"

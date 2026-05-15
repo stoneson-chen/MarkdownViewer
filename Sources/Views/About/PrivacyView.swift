@@ -28,9 +28,10 @@ struct PrivacyView: View {
     """
 
     private var privacyContent: AttributedString {
-        (try? AttributedString(markdown: privacyMD,
-            options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace))
-        ) ?? AttributedString(privacyMD)
+        (try? AttributedString(
+            markdown: privacyMD,
+            options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .full)
+        )) ?? AttributedString(privacyMD)
     }
 
     var body: some View {
