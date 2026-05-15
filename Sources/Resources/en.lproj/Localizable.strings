@@ -8,10 +8,6 @@
 "outline.empty.title" = "No Outline";
 "outline.empty.description" = "Add # headings to the document to generate an outline.";
 
-// Sidebar Tabs
-"sidebar.files" = "Files";
-"sidebar.outline" = "Outline";
-
 // Split View
 "split.horizontal" = "Horizontal Split";
 "split.vertical" = "Vertical Split";
@@ -61,12 +57,10 @@
 "settings.comingSoon" = "More general settings coming soon...";
 
 // Toolbar Tooltips
-"toolbar.toggleSidebar" = "Toggle Sidebar (⌘S)";
 "toolbar.openFile" = "Open File (⌘O)";
 "toolbar.editMode" = "Switch to Edit Mode (⌘E)";
 "toolbar.previewMode" = "Switch to Preview Mode (⌘E)";
 "toolbar.toggleSplit" = "Toggle Split Orientation (⌘\\)";
-"toolbar.dirtyIndicator" = "Document modified, unsaved";
 
 // Common
 "common.error" = "Error";
@@ -74,18 +68,11 @@
 
 // Dialogs
 "dialog.openFile" = "Choose Markdown File";
-"dialog.chooseFolder" = "Choose a folder containing Markdown files";
 
 // Errors
 "error.open" = "Failed to open file: ";
 "error.save" = "Failed to save: ";
 "error.saveAs" = "Failed to save as: ";
-
-// Sidebar
-"sidebar.title" = "Files";
-"sidebar.openFolder" = "Open Folder";
-"sidebar.noFolder" = "No Folder Open";
-"sidebar.openFolderButton" = "Open Folder...";
 
 // Status Bar
 "status.lines" = "Lines";

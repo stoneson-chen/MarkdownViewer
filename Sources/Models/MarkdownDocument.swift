@@ -1,4 +1,3 @@
-import SwiftUI
 import UniformTypeIdentifiers
 
 /// UTType extension for Markdown file identification.

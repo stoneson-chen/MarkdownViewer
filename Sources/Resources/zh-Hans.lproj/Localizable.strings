@@ -8,10 +8,6 @@
 "outline.empty.title" = "暂无目录";
 "outline.empty.description" = "在文档中添加 # 标题即可生成";
 
-// Sidebar Tabs
-"sidebar.files" = "文件";
-"sidebar.outline" = "大纲";
-
 // Split View
 "split.horizontal" = "左右分栏";
 "split.vertical" = "上下分栏";
@@ -61,12 +57,10 @@
 "settings.comingSoon" = "更多通用设置即将推出…";
 
 // Toolbar Tooltips
-"toolbar.toggleSidebar" = "切换侧边栏 (⌘S)";
 "toolbar.openFile" = "打开文件 (⌘O)";
 "toolbar.editMode" = "切换到编辑模式 (⌘E)";
 "toolbar.previewMode" = "切换到预览模式 (⌘E)";
 "toolbar.toggleSplit" = "切换分栏方向 (⌘\\)";
-"toolbar.dirtyIndicator" = "文档已修改，未保存";
 
 // Common
 "common.error" = "错误";
@@ -74,19 +68,11 @@
 
 // Dialogs
 "dialog.openFile" = "选择 Markdown 文件";
-"dialog.chooseFolder" = "选择包含 Markdown 文件的文件夹";
 
 // Errors
 "error.open" = "无法打开文件：";
 "error.save" = "保存失败：";
 "error.saveAs" = "另存为失败：";
-
-// Sidebar
-"sidebar.title" = "文件";
-"sidebar.openFolder" = "打开文件夹";
-"sidebar.noFolder" = "未打开文件夹";
-"sidebar.openFolderButton" = "打开文件夹…";
-"sidebar.loading" = "加载目录列表中…";
 
 // Status Bar
 "status.lines" = "行";

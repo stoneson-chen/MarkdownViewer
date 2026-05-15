@@ -22,18 +22,6 @@ final class FileService {
     @ObservationIgnored
     private var pendingFolderLoadCompletion: (@MainActor () -> Void)?
 
-    /// Open a folder and build a file tree filtered to Markdown files.
-    func openFolder() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.message = String(localized: "dialog.chooseFolder", bundle: .appResources)
-
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        loadFolder(at: url)
-    }
-
     /// Load a folder at the given URL into the sidebar.
     func loadFolder(at url: URL, selecting selectedFileURL: URL? = nil, onLoadFinished: (@MainActor () -> Void)? = nil) {
         let folderURL = url.standardized
@@ -94,16 +82,6 @@ final class FileService {
         currentFolderURL = folderURL
         folderAccessMessage = nil
         rootNode = Self.fallbackTree(for: folderURL, selectedFileURL: selected)
-    }
-
-    /// Read the contents of a file at the given URL.
-    func readFile(at url: URL) throws -> String {
-        try String(contentsOf: url, encoding: .utf8)
-    }
-
-    /// Write content to a file at the given URL.
-    func writeFile(_ content: String, to url: URL) throws {
-        try content.write(to: url, atomically: true, encoding: .utf8)
     }
 
     // MARK: - Private
