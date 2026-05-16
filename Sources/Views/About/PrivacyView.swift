@@ -1,3 +1,12 @@
+// * Copyright © 2026  CHENXX & CHENXX.ORG. All rights reserved.
+// * CHENXX.ORG 版权所有，全球范围内保留所有权利。
+// * 项目名称：MarkdownViewer（墨阅）
+// * 开发人员：Chen Xinxing（陈新兴）
+// * 创建日期：2026
+// *
+// * Licensed under the MIT License.
+// * See the LICENSE file in the project root for full license text.
+
 import SwiftUI
 
 /// Privacy policy sheet displayed from the About window.
@@ -36,37 +45,24 @@ struct PrivacyView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Header
             HStack {
-                Label("隐私政策", systemImage: "hand.raised.fill")
-                    .font(.title3.bold())
+                Text("隐私政策")
+                    .font(.headline)
                 Spacer()
-                Button {
-                    dismiss()
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.title3)
-                        .foregroundColor(.secondary)
-                }
-                .buttonStyle(.plain)
-                .keyboardShortcut(.escape, modifiers: [])
+                Button("完成") { dismiss() }
+                    .keyboardShortcut(.escape, modifiers: [])
             }
-            .padding(.horizontal, 24)
-            .padding(.top, 20)
-            .padding(.bottom, 12)
+            .padding()
 
             Divider()
-                .padding(.horizontal, 24)
 
             ScrollView {
                 Text(privacyContent)
                     .textSelection(.enabled)
-                    .lineSpacing(5)
-                    .padding(24)
+                    .padding()
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .frame(width: 500, height: 420)
-        .background(.regularMaterial)
+        .frame(width: 480, height: 400)
     }
 }

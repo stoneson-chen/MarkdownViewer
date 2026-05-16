@@ -1,3 +1,12 @@
+// * Copyright © 2026  CHENXX & CHENXX.ORG. All rights reserved.
+// * CHENXX.ORG 版权所有，全球范围内保留所有权利。
+// * 项目名称：MarkdownViewer（墨阅）
+// * 开发人员：Chen Xinxing（陈新兴）
+// * 创建日期：2026
+// *
+// * Licensed under the MIT License.
+// * See the LICENSE file in the project root for full license text.
+
 import SwiftUI
 
 /// App theme options
@@ -35,120 +44,59 @@ struct SettingsView: View {
     @AppStorage("appTheme") private var appTheme: AppTheme = .system
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Header
-            HStack {
-                Image(systemName: "gearshape.fill")
-                    .font(.title2)
-                    .foregroundStyle(.secondary)
-                Text("设置")
-                    .font(.title2.bold())
-                Spacer()
-            }
-            .padding(.horizontal, 28)
-            .padding(.top, 24)
-            .padding(.bottom, 16)
-
-            Divider()
-                .padding(.horizontal, 28)
-
-            ScrollView {
-                VStack(spacing: 24) {
-                    themeSection
-                    cssSection
-                }
-                .padding(24)
-            }
-        }
-        .frame(width: 480, height: 380)
-    }
-
-    // MARK: - Theme Section
-
-    private var themeSection: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Label(String(localized: "settings.themeMode", bundle: .appResources), systemImage: "circle.lefthalf.filled")
-                .font(.headline)
-
-            HStack(spacing: 8) {
-                ForEach(AppTheme.allCases) { theme in
-                    themeCard(theme, isSelected: appTheme == theme)
-                        .onTapGesture { appTheme = theme }
-                }
-            }
-        }
-        .padding(20)
-        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
-    }
-
-    private func themeCard(_ theme: AppTheme, isSelected: Bool) -> some View {
-        VStack(spacing: 8) {
-            Image(systemName: theme.icon)
-                .font(.system(size: 22))
-                .foregroundColor(isSelected ? .white : .secondary)
-                .frame(width: 44, height: 44)
-                .background(isSelected ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.quaternary), in: RoundedRectangle(cornerRadius: 10))
-
-            Text(theme.localizedTitle)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(isSelected ? .primary : .secondary)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 10)
-        .background(isSelected ? AnyShapeStyle(.primary.opacity(0.06)) : AnyShapeStyle(.clear), in: RoundedRectangle(cornerRadius: 8))
-    }
-
-    // MARK: - CSS Section
-
-    private var cssSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label(String(localized: "settings.customCSS", bundle: .appResources), systemImage: "paintpalette.fill")
-                .font(.headline)
-
-            Text(String(localized: "settings.customCSSDesc", bundle: .appResources))
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-
-            HStack(spacing: 8) {
-                Text(customCSSPath.isEmpty
-                     ? String(localized: "settings.customCSSNone", bundle: .appResources)
-                     : (URL(fileURLWithPath: customCSSPath).lastPathComponent))
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(customCSSPath.isEmpty ? .tertiary : .primary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                Button {
-                    selectCSSFile()
-                } label: {
-                    Label(String(localized: "menu.open", bundle: .appResources), systemImage: "folder")
-                        .font(.system(size: 12))
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-
-                if !customCSSPath.isEmpty {
-                    Button {
-                        customCSSPath = ""
-                        UserDefaults.standard.removeObject(forKey: Self.customCSSBookmarkKey)
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 14))
-                            .foregroundColor(.red)
+        Form {
+            Section(header: Text(String(localized: "settings.themeMode", bundle: .appResources))) {
+                Picker(String(localized: "settings.themeMode", bundle: .appResources), selection: $appTheme) {
+                    ForEach(AppTheme.allCases) { theme in
+                        Label(theme.localizedTitle, systemImage: theme.icon)
+                            .tag(theme)
                     }
-                    .buttonStyle(.plain)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+            }
+
+            Section(header: Text(String(localized: "settings.customCSS", bundle: .appResources))) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(String(localized: "settings.customCSSDesc", bundle: .appResources))
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+
+                    HStack {
+                        Text(customCSSPath.isEmpty
+                             ? String(localized: "settings.customCSSNone", bundle: .appResources)
+                             : (URL(fileURLWithPath: customCSSPath).lastPathComponent))
+                            .font(.system(.body, design: .monospaced))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        
+                        Spacer()
+                        
+                        Button(String(localized: "menu.open", bundle: .appResources)) {
+                            selectCSSFile()
+                        }
+                        
+                        if !customCSSPath.isEmpty {
+                            Button {
+                                customCSSPath = ""
+                                UserDefaults.standard.removeObject(forKey: Self.customCSSBookmarkKey)
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundColor(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.vertical, 4)
+
+                    Text(String(localized: "settings.customCSSTip", bundle: .appResources))
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
                 }
             }
-            .padding(10)
-            .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 6))
-
-            Text(String(localized: "settings.customCSSTip", bundle: .appResources))
-                .font(.caption)
-                .foregroundStyle(.tertiary)
         }
-        .padding(20)
-        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
+        .formStyle(.grouped)
+        .frame(width: 450, height: 320)
     }
 
     // MARK: - Helpers

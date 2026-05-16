@@ -86,14 +86,6 @@ h6 { font-size: 0.9em; color: var(--text-secondary); }
 /* Paragraphs */
 p {
     margin-bottom: 1em;
-    text-indent: 2em;
-}
-
-.markdown-body > p:first-of-type,
-li > p,
-blockquote p,
-td p {
-    text-indent: 0;
 }
 
 /* Links */

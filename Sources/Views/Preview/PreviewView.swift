@@ -1,3 +1,12 @@
+// * Copyright © 2026  CHENXX & CHENXX.ORG. All rights reserved.
+// * CHENXX.ORG 版权所有，全球范围内保留所有权利。
+// * 项目名称：MarkdownViewer（墨阅）
+// * 开发人员：Chen Xinxing（陈新兴）
+// * 创建日期：2026
+// *
+// * Licensed under the MIT License.
+// * See the LICENSE file in the project root for full license text.
+
 import SwiftUI
 import WebKit
 
@@ -58,6 +67,13 @@ struct WebPreview: NSViewRepresentable {
     let appTheme: AppTheme
     let commandScope: WindowCommandScope
 
+    /// mermaid.min.js loaded once from the app bundle (thread-safe lazy static).
+    private static let mermaidJS: String = {
+        guard let url = Bundle.appResources.url(forResource: "mermaid", withExtension: "min.js"),
+              let js = try? String(contentsOf: url, encoding: .utf8) else { return "" }
+        return js
+    }()
+
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.preferences.setValue(false, forKey: "developerExtrasEnabled")
@@ -109,7 +125,16 @@ struct WebPreview: NSViewRepresentable {
     // MARK: - HTML Template
 
     private func wrapInHTMLTemplate(body: String, css: String, basePath: String) -> String {
-        """
+        let mmThemeString = switch appTheme {
+            case .dark: "dark"
+            case .light: "default"
+            case .system: "auto"
+        }
+        let mermaidScriptTag: String = {
+            let js = Self.mermaidJS
+            return js.isEmpty ? "" : "<script>\(js)</script>"
+        }()
+        return """
         <!DOCTYPE html>
         <html>
         <head>
@@ -118,6 +143,7 @@ struct WebPreview: NSViewRepresentable {
             <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src file: data: https: http:; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
             <base href="\(basePath.replacingOccurrences(of: "\"", with: "&quot;"))">
             <link rel="icon" href="data:,">
+            \(mermaidScriptTag)
             <style>
             \(css)
             html { scroll-behavior: smooth; }
@@ -139,6 +165,10 @@ struct WebPreview: NSViewRepresentable {
                 .hl-func     { color: #d2a8ff; }
                 .hl-builtin  { color: #79c0ff; }
             }
+
+            /* Mermaid */
+            .mermaid { text-align: center; margin: 1.2em 0; overflow-x: auto; }
+            .mermaid svg { max-width: 100%; height: auto; }
             </style>
             \(themeOverrideStyle())
         </head>
@@ -196,6 +226,16 @@ struct WebPreview: NSViewRepresentable {
 
             observeHeadings();
 
+            // Mermaid diagram support
+            var mmTheme = '\(mmThemeString)';
+            if (mmTheme === 'auto') {
+                mmTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default';
+            }
+            if (typeof mermaid !== 'undefined') {
+                // securityLevel 'loose' is safe here — content is from user's own local files, rendered in sandboxed WKWebView
+                mermaid.initialize({ startOnLoad: false, theme: mmTheme, securityLevel: 'loose' });
+            }
+
             // Lightweight syntax highlighter
             function highlightCode() {
                 const keywords = ['func', 'var', 'let', 'const', 'if', 'else', 'for', 'while',
@@ -209,6 +249,7 @@ struct WebPreview: NSViewRepresentable {
                     'reduce', 'forEach', 'compactMap', 'flatMap', 'sorted', 'contains', 'console.log'];
 
                 document.querySelectorAll('pre code[class*="language-"]').forEach(function(block) {
+                    if (block.className.includes('language-mermaid')) return;
                     var lang = block.className.match(/language-(\\w+)/);
                     if (!lang) return;
                     var code = block.innerHTML;
@@ -276,9 +317,24 @@ struct WebPreview: NSViewRepresentable {
                 });
             }
             requestAnimationFrame(highlightCode);
+            requestAnimationFrame(renderMermaid);
             // Re-run after dynamic content updates
             var origUpdate = updateContent;
-            updateContent = function(html) { origUpdate(html); requestAnimationFrame(highlightCode); };
+            updateContent = function(html) { origUpdate(html); requestAnimationFrame(function() { highlightCode(); renderMermaid(); }); };
+
+            function renderMermaid() {
+                if (typeof mermaid === 'undefined') return;
+                document.querySelectorAll('pre code.language-mermaid').forEach(function(block) {
+                    var pre = block.parentElement;
+                    var div = document.createElement('div');
+                    div.className = 'mermaid';
+                    div.textContent = block.textContent;
+                    pre.parentElement.replaceChild(div, pre);
+                });
+                if (document.querySelectorAll('.mermaid').length > 0) {
+                    try { mermaid.run({ querySelector: '.mermaid' }); } catch(e) { console.warn('Mermaid render error:', e); }
+                }
+            }
             </script>
         </body>
         </html>

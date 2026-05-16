@@ -1,3 +1,12 @@
+// * Copyright © 2026  CHENXX & CHENXX.ORG. All rights reserved.
+// * CHENXX.ORG 版权所有，全球范围内保留所有权利。
+// * 项目名称：MarkdownViewer（墨阅）
+// * 开发人员：Chen Xinxing（陈新兴）
+// * 创建日期：2026
+// *
+// * Licensed under the MIT License.
+// * See the LICENSE file in the project root for full license text.
+
 import Foundation
 
 final class WindowCommandScope: NSObject {}
@@ -14,15 +23,9 @@ extension Notification.Name {
     static let formatImage = Notification.Name("formatImage")
 
     // MARK: - View Control
-    static let openFilePanel = Notification.Name("openFilePanel")
-    static let saveFile = Notification.Name("saveFile")
-    static let saveFileAs = Notification.Name("saveFileAs")
-    static let toggleEditing = Notification.Name("toggleEditing")
-    static let toggleSplitOrientation = Notification.Name("toggleSplitOrientation")
     static let showAboutWindow = Notification.Name("showAboutWindow")
 
     // MARK: - Navigation & Sync
-    static let openFileURL = Notification.Name("openFileURL")
     static let scrollToHeading = Notification.Name("scrollToHeading")
     static let didDetectHeading = Notification.Name("didDetectHeading")
     static let executeScrollJS = Notification.Name("executeScrollJS")

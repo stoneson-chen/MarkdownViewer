@@ -1,22 +1,26 @@
 #!/bin/bash
-# Package MarkdownViewer as a macOS .app bundle
+# Copyright © 2026  CHENXX & CHENXX.ORG. All rights reserved.
+# CHENXX.ORG 版权所有，全球范围内保留所有权利。
+# 项目名称：MarkdownViewer（墨阅）
+# 开发人员：Chen Xinxing（陈新兴）
+# 创建日期：2026
+#
+# Licensed under the MIT License.
+# See the LICENSE file in the project root for full license text.
+
 
 set -e
 
-# Repository root (directory containing this script) — works locally and on CI
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$PROJECT_DIR"
 APP_NAME="MarkdownViewer.app"
 APP_DIR="${PROJECT_DIR}/${APP_NAME}"
 CONTENTS_DIR="${APP_DIR}/Contents"
 MACOS_DIR="${CONTENTS_DIR}/MacOS"
 RESOURCES_DIR="${CONTENTS_DIR}/Resources"
 
-# Clean previous build
 rm -rf "${APP_DIR}"
 
-# Recompile (clean first: avoids odd incremental state; -j 1 reduces races if multiple
-# frontends touch the same module. If you still see "input file was modified during
-# the build", pause editor auto-save / format-on-save for Sources/ while this runs.)
 echo "🧹 Cleaning SPM build artifacts..."
 swift package clean
 
@@ -27,32 +31,24 @@ if ! swift build -c release --disable-sandbox -j 1; then
     swift build -c release --disable-sandbox -j 1
 fi
 
-# Create .app bundle structure
 mkdir -p "${MACOS_DIR}"
 mkdir -p "${RESOURCES_DIR}"
 
-# Copy executable
 cp "${PROJECT_DIR}/.build/release/MarkdownViewer" "${MACOS_DIR}/MarkdownViewer"
 
-# Copy Info.plist
 cp "${PROJECT_DIR}/Info.plist" "${CONTENTS_DIR}/Info.plist"
 
-# Copy entitlements (for reference)
 cp "${PROJECT_DIR}/MarkdownViewer.entitlements" "${CONTENTS_DIR}/MarkdownViewer.entitlements"
 
-# Copy app icon if exists
 if [ -f "${PROJECT_DIR}/AppIcon.icns" ]; then
     cp "${PROJECT_DIR}/AppIcon.icns" "${RESOURCES_DIR}/AppIcon.icns"
 fi
 
-# Copy bundled resources (SPM creates this bundle for resources)
 BUNDLE_RESOURCES="${PROJECT_DIR}/.build/release/MarkdownViewer_MarkdownViewer.bundle"
 if [ -d "${BUNDLE_RESOURCES}" ]; then
     echo "📦 Copying SPM resource bundle..."
     cp -R "${BUNDLE_RESOURCES}" "${RESOURCES_DIR}/"
     
-    # Fix potential case sensitivity issues for Chinese localization
-    # SPM often normalizes to lowercase, but macOS might expect zh-Hans
     if [ -d "${RESOURCES_DIR}/MarkdownViewer_MarkdownViewer.bundle/zh-hans.lproj" ]; then
         mv "${RESOURCES_DIR}/MarkdownViewer_MarkdownViewer.bundle/zh-hans.lproj" "${RESOURCES_DIR}/MarkdownViewer_MarkdownViewer.bundle/zh-Hans.lproj"
     fi
@@ -60,23 +56,17 @@ else
     echo "⚠️ Warning: Resource bundle not found at ${BUNDLE_RESOURCES}"
 fi
 
-# Copy localizations to root Resources for Bundle.main access as well
 echo "📦 Syncing localizations to root Resources..."
 cp -R "${PROJECT_DIR}/Sources/Resources/"*.lproj "${RESOURCES_DIR}/"
 
-# Force update default.css in the bundle
 echo "🎨 Updating default.css..."
 if [ -d "${RESOURCES_DIR}/MarkdownViewer_MarkdownViewer.bundle" ]; then
     cp "${PROJECT_DIR}/Sources/Resources/default.css" "${RESOURCES_DIR}/MarkdownViewer_MarkdownViewer.bundle/default.css"
 fi
 
-# Create PkgInfo
 echo -n "APPL????" > "${CONTENTS_DIR}/PkgInfo"
 
-# Create CLI symlink helper script
 cat > "${MACOS_DIR}/mdview" << 'EOF'
-#!/bin/bash
-# CLI helper: mdview /path/to/file.md
 DIR="$(cd "$(dirname "$0")" && pwd)"
 "${DIR}/MarkdownViewer" "$@"
 EOF

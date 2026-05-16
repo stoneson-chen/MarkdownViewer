@@ -1,3 +1,12 @@
+// * Copyright © 2026  CHENXX & CHENXX.ORG. All rights reserved.
+// * CHENXX.ORG 版权所有，全球范围内保留所有权利。
+// * 项目名称：MarkdownViewer（墨阅）
+// * 开发人员：Chen Xinxing（陈新兴）
+// * 创建日期：2026
+// *
+// * Licensed under the MIT License.
+// * See the LICENSE file in the project root for full license text.
+
 import SwiftUI
 
 /// A view that displays the table of contents (TOC) for the current document.
@@ -31,31 +40,21 @@ struct OutlineView: View {
     }
 
     private var outlineList: some View {
-        List {
-            ForEach(headings) { heading in
-                let isActive = heading.anchorID == activeHeadingID
+        List(headings) { heading in
+            let isActive = heading.anchorID == activeHeadingID
+            
+            HStack(spacing: 8) {
+                headingIcon(for: heading.level)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 14)
                 
-                Button {
-                    onSelect(heading)
-                } label: {
-                    HStack(spacing: 8) {
-                        headingIcon(for: heading.level)
-                            .foregroundStyle(isActive ? .primary : .secondary)
-                            .frame(width: 14)
-                        
-                        Text(heading.text)
-                            .font(.system(size: 13, weight: isActive ? .semibold : .regular))
-                            .foregroundStyle(isActive ? Color.accentColor : .primary)
-                            .lineLimit(1)
-                    }
-                    .padding(.vertical, 4)
-                    .padding(.horizontal, 6)
-                    .background(isActive ? Color.accentColor.opacity(0.1) : Color.clear)
-                    .cornerRadius(4)
-                }
-                .buttonStyle(.plain)
-                .padding(.leading, CGFloat((heading.level - 1) * 12))
-                .help(heading.text)
+                Text(heading.text)
+                    .font(.system(size: 13, weight: isActive ? .medium : .regular))
+                    .foregroundStyle(isActive ? Color.accentColor : .primary)
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                onSelect(heading)
             }
         }
         .listStyle(.sidebar)
