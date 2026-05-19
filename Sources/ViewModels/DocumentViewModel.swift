@@ -159,7 +159,7 @@ final class DocumentViewModel {
            let content = try? String(contentsOf: url, encoding: .utf8) {
             text = content
         } else {
-            text = fallbackReadme
+            text = String.appLocalized("fallback.readme")
         }
         fileURL = nil
         originalText = text
@@ -539,15 +539,4 @@ final class DocumentViewModel {
         return count
     }
 
-    private let fallbackReadme = """
-    # 墨阅 (MarkdownViewer)
-
-    > **墨色生香，阅见不凡。**
-
-    一款为 macOS 精心打造的轻量级 Markdown 预览器。
-
-    - 默认纯预览模式，切换编辑后支持双栏实时预览
-    - 支持自定义 CSS 样式表
-    - 命令行打开：`open -a "墨阅" file.md`
-    """
 }

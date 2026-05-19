@@ -11,7 +11,6 @@ import SwiftUI
 
 /// Beautiful About window showcasing app info and developer credits.
 struct AboutView: View {
-    @Environment(\.dismiss) private var dismiss
     @State private var showPrivacy = false
 
     private let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
@@ -26,15 +25,15 @@ struct AboutView: View {
                     .foregroundStyle(.secondary)
                 
                 VStack(spacing: 4) {
-                    Text(String(localized: "about.name", bundle: .appResources))
+                    Text(String.appLocalized("about.name"))
                         .font(.title.bold())
-                    
+
                     Text("MarkdownViewer")
                         .font(.subheadline.monospaced())
                         .foregroundStyle(.tertiary)
                 }
                 
-                Text(String(localized: "about.tagline", bundle: .appResources))
+                Text(String.appLocalized("about.tagline"))
                     .font(.subheadline)
                     .italic()
                     .foregroundStyle(.secondary)
@@ -48,13 +47,13 @@ struct AboutView: View {
             VStack(spacing: 20) {
                 // Version info
                 HStack(spacing: 32) {
-                    infoTag(label: String(localized: "about.version", bundle: .appResources), value: appVersion)
-                    infoTag(label: String(localized: "about.build", bundle: .appResources), value: buildNumber)
+                    infoTag(label: String.appLocalized("about.version"), value: appVersion)
+                    infoTag(label: String.appLocalized("about.build"), value: buildNumber)
                 }
 
                 // Developer info
                 VStack(spacing: 8) {
-                    Text(String(localized: "about.author", bundle: .appResources))
+                    Text(String.appLocalized("about.author"))
                         .font(.headline)
 
                     HStack(spacing: 16) {
@@ -67,11 +66,11 @@ struct AboutView: View {
 
                 // Copyright & Privacy
                 VStack(spacing: 12) {
-                    Text(String(localized: "about.copyright", bundle: .appResources))
+                    Text(String.appLocalized("about.copyright"))
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
 
-                    Button("隐私政策") {
+                    Button(String.appLocalized("about.privacy")) {
                         showPrivacy = true
                     }
                     .buttonStyle(.link)

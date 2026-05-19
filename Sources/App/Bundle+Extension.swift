@@ -28,3 +28,10 @@ extension Bundle {
         #endif
     }
 }
+
+extension String {
+    /// Localized string from `Localizable.strings` in the app resource bundle.
+    static func appLocalized(_ key: String.LocalizationValue) -> String {
+        String(localized: key, bundle: .appResources)
+    }
+}

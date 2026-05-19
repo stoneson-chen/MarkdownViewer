@@ -35,8 +35,6 @@
 "about.tagline" = "Elegant Reading, Exceptional Experience";
 "about.version" = "Version";
 "about.build" = "Build";
-"about.engine" = "Engine";
-"about.developer" = "Developer";
 "about.author" = "Chen Xinxing";
 "about.copyright" = "Copyright © 2026 Chen Xinxing. All rights reserved.";
 
@@ -82,3 +80,47 @@
 "status.preview" = "Preview";
 "status.unsaved" = "Unsaved";
 "status.saved" = "Saved";
+
+// Privacy
+"about.privacy" = "Privacy Policy";
+"privacy.title" = "Privacy Policy";
+"privacy.done" = "Done";
+"privacy.content" = "**MarkdownViewer** is a minimalist local Markdown editor. We take your privacy very seriously.
+
+## Data Collection Statement
+
+**MarkdownViewer does NOT collect any personal data.**
+
+- **No Information Collection**: The app does not require user registration or login, and does not collect any personal information such as name, email, or location.
+- **Local Processing**: All Markdown parsing, rendering, and storage are done locally on your device. Data is never uploaded to any server.
+- **No Trackers**: The app does not contain any third-party SDKs, advertising plugins, or analytics tools.
+- **File Access**: The app only accesses specific files or folders when you explicitly authorize it via the file picker or drag-and-drop.
+
+## Contact Us
+
+If you have any questions about this Privacy Policy, please contact us via GitHub Issues.
+
+---
+*Last Updated: 2026-05-13*";
+
+// Editor Placeholders
+"editor.placeholder.bold" = "Bold Text";
+"editor.placeholder.italic" = "Italic Text";
+"editor.placeholder.code" = "Code";
+"editor.placeholder.link" = "Link Text";
+"editor.placeholder.image" = "Image Description";
+
+// Parser
+"parser.metadata.summary" = "📋 Document Metadata";
+
+// Fallback Content
+"fallback.readme" = "# MarkdownViewer
+
+> **Elegant Reading, Exceptional Experience.**
+
+A lightweight Markdown viewer built for macOS.
+
+- Preview-only by default, real-time split view when editing
+- Support for custom CSS stylesheets
+- Open via CLI: `open -a \"MarkdownViewer\" file.md`
+";

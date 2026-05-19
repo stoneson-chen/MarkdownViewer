@@ -10,6 +10,16 @@
 import SwiftUI
 import AppKit
 
+private enum EditorFormatActions {
+    static let wrap: [(Notification.Name, String, String, String.LocalizationValue)] = [
+        (.formatBold, "**", "**", "editor.placeholder.bold"),
+        (.formatItalic, "*", "*", "editor.placeholder.italic"),
+        (.formatCode, "`", "`", "editor.placeholder.code"),
+        (.formatLink, "[", "](url)", "editor.placeholder.link"),
+        (.formatImage, "![", "](url)", "editor.placeholder.image"),
+    ]
+}
+
 /// The Markdown source editor pane, wrapping NSTextView for performance.
 struct EditorView: View {
     @Binding var text: String
@@ -170,46 +180,29 @@ struct MarkdownTextEditor: NSViewRepresentable {
         private func registerFormatNotifications() {
             let center = NotificationCenter.default
 
-            notificationObservers.append(
-                center.addObserver(forName: .formatBold, object: parent.commandScope, queue: .main) { [weak self] _ in
-                    Task { @MainActor in self?.wrapSelection(prefix: "**", suffix: "**", placeholder: "粗体文本") }
-                }
-            )
-            notificationObservers.append(
-                center.addObserver(forName: .formatItalic, object: parent.commandScope, queue: .main) { [weak self] _ in
-                    Task { @MainActor in self?.wrapSelection(prefix: "*", suffix: "*", placeholder: "斜体文本") }
-                }
-            )
-            notificationObservers.append(
-                center.addObserver(forName: .formatCode, object: parent.commandScope, queue: .main) { [weak self] _ in
-                    Task { @MainActor in self?.wrapSelection(prefix: "`", suffix: "`", placeholder: "代码") }
-                }
-            )
-            notificationObservers.append(
-                center.addObserver(forName: .formatH1, object: parent.commandScope, queue: .main) { [weak self] _ in
-                    Task { @MainActor in self?.prefixLine(prefix: "# ") }
-                }
-            )
-            notificationObservers.append(
-                center.addObserver(forName: .formatH2, object: parent.commandScope, queue: .main) { [weak self] _ in
-                    Task { @MainActor in self?.prefixLine(prefix: "## ") }
-                }
-            )
-            notificationObservers.append(
-                center.addObserver(forName: .formatH3, object: parent.commandScope, queue: .main) { [weak self] _ in
-                    Task { @MainActor in self?.prefixLine(prefix: "### ") }
-                }
-            )
-            notificationObservers.append(
-                center.addObserver(forName: .formatLink, object: parent.commandScope, queue: .main) { [weak self] _ in
-                    Task { @MainActor in self?.wrapSelection(prefix: "[", suffix: "](url)", placeholder: "链接文本") }
-                }
-            )
-            notificationObservers.append(
-                center.addObserver(forName: .formatImage, object: parent.commandScope, queue: .main) { [weak self] _ in
-                    Task { @MainActor in self?.wrapSelection(prefix: "![", suffix: "](url)", placeholder: "图片描述") }
-                }
-            )
+            for (name, prefix, suffix, placeholderKey) in EditorFormatActions.wrap {
+                notificationObservers.append(
+                    center.addObserver(forName: name, object: parent.commandScope, queue: .main) { [weak self] _ in
+                        let placeholder = String.appLocalized(placeholderKey)
+                        Task { @MainActor in
+                            self?.wrapSelection(prefix: prefix, suffix: suffix, placeholder: placeholder)
+                        }
+                    }
+                )
+            }
+
+            let headingPrefixes: [(Notification.Name, String)] = [
+                (.formatH1, "# "),
+                (.formatH2, "## "),
+                (.formatH3, "### "),
+            ]
+            for (name, prefix) in headingPrefixes {
+                notificationObservers.append(
+                    center.addObserver(forName: name, object: parent.commandScope, queue: .main) { [weak self] _ in
+                        Task { @MainActor in self?.prefixLine(prefix: prefix) }
+                    }
+                )
+            }
         }
 
         // MARK: - Text Manipulation

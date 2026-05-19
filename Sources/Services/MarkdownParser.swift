@@ -175,7 +175,7 @@ nonisolated final class MarkdownParser: Sendable {
                 let fmContent = fmLines.joined(separator: "\n")
                 htmlParts.append("""
                 <details style='margin-bottom:1.2em;font-size:0.9em'>
-                <summary style='cursor:pointer;color:var(--text-secondary);user-select:none'>📋 文档元数据</summary>
+                <summary style='cursor:pointer;color:var(--text-secondary);user-select:none'>\(String.appLocalized("parser.metadata.summary"))</summary>
                 <pre style='margin-top:0.5em;padding:12px 16px;background:var(--bg-code);border-radius:6px;font-size:0.85em;line-height:1.5;overflow-x:auto'>\(escapeHTML(fmContent))</pre>
                 </details>
                 """)
