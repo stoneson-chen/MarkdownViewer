@@ -79,7 +79,6 @@ struct SettingsView: View {
                         if !customCSSPath.isEmpty {
                             Button {
                                 customCSSPath = ""
-                                UserDefaults.standard.removeObject(forKey: Self.customCSSBookmarkKey)
                             } label: {
                                 Image(systemName: "xmark.circle.fill")
                                     .foregroundColor(.secondary)
@@ -101,8 +100,6 @@ struct SettingsView: View {
 
     // MARK: - Helpers
 
-    private static let customCSSBookmarkKey = "userCustomCSSBookmark"
-
     private func selectCSSFile() {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = false
@@ -110,17 +107,8 @@ struct SettingsView: View {
         panel.canChooseFiles = true
         panel.allowedContentTypes = [.css]
 
-        if panel.runModal() == .OK {
-            guard let url = panel.url else { return }
+        if panel.runModal() == .OK, let url = panel.url {
             customCSSPath = url.path
-
-            if let bookmark = try? url.bookmarkData(
-                options: [.withSecurityScope],
-                includingResourceValuesForKeys: nil,
-                relativeTo: nil
-            ) {
-                UserDefaults.standard.set(bookmark, forKey: Self.customCSSBookmarkKey)
-            }
         }
     }
 }

@@ -15,16 +15,16 @@ nonisolated final class MarkdownParser: Sendable {
 
     struct ParseResult: Sendable {
         let html: String
-        let wordCount: Int
         let characterCount: Int
         let headings: [Heading]
     }
 
     struct Heading: Identifiable, Sendable {
-        let id = UUID()
         let level: Int
         let text: String
         let anchorID: String
+        /// Stable identity for SwiftUI lists; matches the in-document anchor.
+        var id: String { anchorID }
     }
 
     // MARK: - Pre-compiled Regexes (Shared & Thread-safe)
@@ -67,15 +67,13 @@ nonisolated final class MarkdownParser: Sendable {
     func parseFirstChunk(_ markdown: String, lineLimit: Int = 150) -> ParseResult {
         let lines = markdown.components(separatedBy: .newlines)
         let chunk = Array(lines.prefix(lineLimit))
-        let result = parseLines(chunk, fullText: markdown, isPartial: true, skipWordCount: true)
-        return result
+        return parseLines(chunk, fullText: markdown, isPartial: true)
     }
 
     /// Full parse of the complete markdown text.
-    func parse(_ markdown: String, skipWordCount: Bool = false) async -> ParseResult {
+    func parse(_ markdown: String) -> ParseResult {
         let lines = markdown.components(separatedBy: .newlines)
-        let result = parseLines(lines, fullText: markdown, isPartial: false, skipWordCount: skipWordCount)
-        return result
+        return parseLines(lines, fullText: markdown, isPartial: false)
     }
 
     // MARK: - Nested List Rendering
@@ -151,7 +149,7 @@ nonisolated final class MarkdownParser: Sendable {
 
     // MARK: - Core Parse Engine
 
-    private func parseLines(_ lines: [String], fullText: String, isPartial: Bool, skipWordCount: Bool) -> ParseResult {
+    private func parseLines(_ lines: [String], fullText: String, isPartial: Bool) -> ParseResult {
         var htmlParts: [String] = []
         htmlParts.reserveCapacity(lines.count * 2)
 
@@ -243,48 +241,17 @@ nonisolated final class MarkdownParser: Sendable {
                 htmlParts.append(renderNestedBlockquote(quoteLines))
                 continue
 
-            case "-":
-                if Regexes.thematicBreak.firstMatch(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)) != nil {
+            case "-", "*", "+":
+                let range = NSRange(trimmed.startIndex..., in: trimmed)
+                // `+` is never a thematic break, so only check it for `-`/`*`.
+                if trimmed.first != "+",
+                   Regexes.thematicBreak.firstMatch(in: trimmed, range: range) != nil {
                     if inParagraph { htmlParts.append("</p>\n"); inParagraph = false }
                     htmlParts.append("<hr>\n")
                     i += 1; continue
                 }
-                if Regexes.taskList.firstMatch(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)) != nil {
-                    if inParagraph { htmlParts.append("</p>\n"); inParagraph = false }
-                    htmlParts.append("<ul>\n")
-                    let indent = line.prefix(while: { $0 == " " || $0 == "\t" }).count
-                    htmlParts.append(renderList(lines: lines, startIndex: &i, indent: indent))
-                    htmlParts.append("</ul>\n")
-                    continue
-                }
-                if Regexes.unorderedList.firstMatch(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)) != nil {
-                    if inParagraph { htmlParts.append("</p>\n"); inParagraph = false }
-                    htmlParts.append("<ul>\n")
-                    let indent = line.prefix(while: { $0 == " " || $0 == "\t" }).count
-                    htmlParts.append(renderList(lines: lines, startIndex: &i, indent: indent))
-                    htmlParts.append("</ul>\n")
-                    continue
-                }
-                break
-
-            case "*":
-                if Regexes.thematicBreak.firstMatch(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)) != nil {
-                    if inParagraph { htmlParts.append("</p>\n"); inParagraph = false }
-                    htmlParts.append("<hr>\n")
-                    i += 1; continue
-                }
-                if Regexes.unorderedList.firstMatch(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)) != nil {
-                    if inParagraph { htmlParts.append("</p>\n"); inParagraph = false }
-                    htmlParts.append("<ul>\n")
-                    let indent = line.prefix(while: { $0 == " " || $0 == "\t" }).count
-                    htmlParts.append(renderList(lines: lines, startIndex: &i, indent: indent))
-                    htmlParts.append("</ul>\n")
-                    continue
-                }
-                break
-
-            case "+":
-                if Regexes.unorderedList.firstMatch(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)) != nil {
+                if Regexes.taskList.firstMatch(in: trimmed, range: range) != nil
+                    || Regexes.unorderedList.firstMatch(in: trimmed, range: range) != nil {
                     if inParagraph { htmlParts.append("</p>\n"); inParagraph = false }
                     htmlParts.append("<ul>\n")
                     let indent = line.prefix(while: { $0 == " " || $0 == "\t" }).count
@@ -335,16 +302,8 @@ nonisolated final class MarkdownParser: Sendable {
 
         if inParagraph { htmlParts.append("</p>\n") }
 
-        let wordCount: Int
-        if isPartial || skipWordCount {
-            wordCount = 0
-        } else {
-            wordCount = countWords(in: fullText)
-        }
-
         return ParseResult(
             html: htmlParts.joined(),
-            wordCount: wordCount,
             characterCount: isPartial ? 0 : fullText.count,
             headings: headings
         )
@@ -361,6 +320,7 @@ nonisolated final class MarkdownParser: Sendable {
         }
 
         var result = escapeHTML(text)
+        let codeTokens = protectInlineCode(in: &result)
 
         // 1. Unescape allowed HTML tags with strict attribute filtering
         if result.contains("&lt;") {
@@ -382,12 +342,7 @@ nonisolated final class MarkdownParser: Sendable {
             }
         }
 
-        // 2. Inline Code (before images/links so backtick in URLs is fine)
-        if result.contains("`") {
-            result = Regexes.inlineCode.stringByReplacingMatches(in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "<code>$1</code>")
-        }
-
-        // 3. Images (before links so ![alt](url) isn't confused with [text](url))
+        // 2. Images (before links so ![alt](url) isn't confused with [text](url))
         if result.contains("![") {
             let matches = Regexes.image.matches(in: result, range: NSRange(result.startIndex..., in: result)).reversed()
             for match in matches {
@@ -400,7 +355,7 @@ nonisolated final class MarkdownParser: Sendable {
             }
         }
 
-        // 4. Links
+        // 3. Links
         if result.contains("[") {
             let matches = Regexes.link.matches(in: result, range: NSRange(result.startIndex..., in: result)).reversed()
             for match in matches {
@@ -413,7 +368,7 @@ nonisolated final class MarkdownParser: Sendable {
             }
         }
 
-        // 5. Bold/Italic/Strikethrough
+        // 4. Bold/Italic/Strikethrough
         if result.contains("*") || result.contains("_") {
             result = Regexes.boldItalic.stringByReplacingMatches(in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "<strong><em>$1</em></strong>")
             result = Regexes.bold.stringByReplacingMatches(in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "<strong>$1$2</strong>")
@@ -424,7 +379,28 @@ nonisolated final class MarkdownParser: Sendable {
             result = Regexes.strikethrough.stringByReplacingMatches(in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "<del>$1</del>")
         }
 
+        for token in codeTokens {
+            result = result.replacingOccurrences(of: token.placeholder, with: token.html)
+        }
+
         return result
+    }
+
+    private func protectInlineCode(in result: inout String) -> [(placeholder: String, html: String)] {
+        guard result.contains("`") else { return [] }
+
+        var tokens: [(placeholder: String, html: String)] = []
+        let matches = Regexes.inlineCode.matches(in: result, range: NSRange(result.startIndex..., in: result)).reversed()
+        for match in matches {
+            guard let fullRange = Range(match.range, in: result),
+                  let codeRange = Range(match.range(at: 1), in: result) else { continue }
+
+            let placeholder = "MDINLINECODETOKEN\(tokens.count)END"
+            let code = String(result[codeRange])
+            tokens.append((placeholder, "<code>\(code)</code>"))
+            result.replaceSubrange(fullRange, with: placeholder)
+        }
+        return tokens
     }
 
     private func smartEncodeURL(_ urlString: String) -> String {
@@ -532,14 +508,6 @@ nonisolated final class MarkdownParser: Sendable {
         } else {
             return "\(slug)-\(count)"
         }
-    }
-
-    private func countWords(in text: String) -> Int {
-        var count = 0
-        text.enumerateSubstrings(in: text.startIndex..., options: [.byWords, .substringNotRequired]) { _, _, _, _ in
-            count += 1
-        }
-        return count
     }
 
     // MARK: - Blockquote Rendering

@@ -15,6 +15,12 @@ struct ContentView: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var hasLoadedInitialContent = false
     @State private var commandScope = WindowCommandScope()
+    @State private var scrollSyncSequence = 0
+    @State private var scrollSyncCommand: ScrollSyncCommand?
+    @State private var scrollSyncPending: (source: ScrollSyncCommand.Source, percent: Double)?
+    @State private var scrollSyncFlushTask: Task<Void, Never>?
+    @State private var lastFlushedEditorPercent: Double = -1
+    @State private var lastFlushedPreviewPercent: Double = -1
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
@@ -61,7 +67,20 @@ struct ContentView: View {
                     columnVisibility = .all
                 }
             }
+            resetScrollSyncState()
         }
+        .onChange(of: viewModel.isEditing) { _, isEditing in
+            if isEditing {
+                resetScrollSyncState()
+            }
+        }
+    }
+
+    private func resetScrollSyncState() {
+        scrollSyncFlushTask?.cancel()
+        scrollSyncPending = nil
+        lastFlushedEditorPercent = -1
+        lastFlushedPreviewPercent = -1
     }
 
     // MARK: - Sidebar
@@ -89,7 +108,7 @@ struct ContentView: View {
     }
 
     private var previewOnlyLayout: some View {
-        PreviewView(viewModel: viewModel, commandScope: commandScope)
+        PreviewView(viewModel: viewModel, commandScope: commandScope, scrollSyncCommand: nil, onScroll: nil)
     }
 
     @ViewBuilder
@@ -112,13 +131,47 @@ struct ContentView: View {
         EditorView(text: Binding(
             get: { viewModel.text },
             set: { viewModel.textDidChange($0) }
-        ), commandScope: commandScope)
+        ), commandScope: commandScope, scrollSyncCommand: scrollSyncCommand) { percent in
+            pushScrollSync(from: .editor, percent: percent)
+        }
         .frame(minWidth: 280, minHeight: 200)
     }
 
     private var previewPane: some View {
-        PreviewView(viewModel: viewModel, commandScope: commandScope)
+        PreviewView(viewModel: viewModel, commandScope: commandScope, scrollSyncCommand: scrollSyncCommand) { percent in
+            pushScrollSync(from: .preview, percent: percent)
+        }
             .frame(minWidth: 280, minHeight: 200)
+    }
+
+    private func pushScrollSync(from source: ScrollSyncCommand.Source, percent: Double) {
+        let clampedPercent = min(1.0, max(0.0, percent))
+        scrollSyncPending = (source, clampedPercent)
+
+        scrollSyncFlushTask?.cancel()
+        scrollSyncFlushTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(ScrollSync.coalesceIntervalMs))
+            guard !Task.isCancelled, let pending = scrollSyncPending else { return }
+            flushScrollSync(source: pending.source, percent: pending.percent)
+        }
+    }
+
+    private func flushScrollSync(source: ScrollSyncCommand.Source, percent: Double) {
+        let last = source == .editor ? lastFlushedEditorPercent : lastFlushedPreviewPercent
+        guard abs(percent - last) >= ScrollSync.minPercentDelta else { return }
+
+        if source == .editor {
+            lastFlushedEditorPercent = percent
+        } else {
+            lastFlushedPreviewPercent = percent
+        }
+
+        scrollSyncSequence += 1
+        scrollSyncCommand = ScrollSyncCommand(
+            source: source,
+            percent: percent,
+            sequence: scrollSyncSequence
+        )
     }
 
     private var commandActions: DocumentCommandActions {

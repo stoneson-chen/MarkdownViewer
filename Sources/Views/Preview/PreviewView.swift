@@ -14,18 +14,21 @@ import WebKit
 struct PreviewView: View {
     @Bindable var viewModel: DocumentViewModel
     let commandScope: WindowCommandScope
+    let scrollSyncCommand: ScrollSyncCommand?
+    let onScroll: ((Double) -> Void)?
     @AppStorage("appTheme") private var appTheme: AppTheme = .system
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            let base = viewModel.resolveRenderingBase()
             WebPreview(
                 html: viewModel.renderedHTML,
-                css: viewModel.resolvedCSS(),
-                baseURL: base.baseURL,
-                basePath: base.basePath,
+                css: viewModel.previewCSS,
+                baseURL: viewModel.resolveRenderingBase(),
+                scrollSessionKey: viewModel.fileURL?.path ?? "__default__",
                 appTheme: appTheme,
-                commandScope: commandScope
+                commandScope: commandScope,
+                scrollSyncCommand: scrollSyncCommand,
+                onScroll: onScroll
             )
 
             if viewModel.isRendering {
@@ -38,16 +41,6 @@ struct PreviewView: View {
             }
         }
         .animation(.easeInOut(duration: 0.15), value: viewModel.isRendering)
-        .onReceive(NotificationCenter.default.publisher(for: .scrollToHeading)) { notification in
-            if notification.object as? WindowCommandScope === commandScope,
-               let anchorID = notification.userInfo?["anchorID"] as? String {
-                NotificationCenter.default.post(
-                    name: .executeScrollJS,
-                    object: commandScope,
-                    userInfo: ["anchorID": anchorID]
-                )
-            }
-        }
         .onReceive(NotificationCenter.default.publisher(for: .didDetectHeading)) { notification in
             if notification.object as? WindowCommandScope === commandScope,
                let anchorID = notification.userInfo?["anchorID"] as? String {
@@ -63,15 +56,18 @@ struct WebPreview: NSViewRepresentable {
     let html: String
     let css: String
     let baseURL: URL?
-    let basePath: String
+    let scrollSessionKey: String
     let appTheme: AppTheme
     let commandScope: WindowCommandScope
+    let scrollSyncCommand: ScrollSyncCommand?
+    let onScroll: ((Double) -> Void)?
 
-    /// mermaid.min.js loaded once from the app bundle (thread-safe lazy static).
-    private static let mermaidJS: String = {
+    /// `mermaid.min.js` loaded once and injected as a `WKUserScript` (saves ~3 MB of string allocation per reload).
+    /// Lives on the configuration so it's shared by every navigation in the web view.
+    private static let mermaidUserScript: WKUserScript? = {
         guard let url = Bundle.appResources.url(forResource: "mermaid", withExtension: "min.js"),
-              let js = try? String(contentsOf: url, encoding: .utf8) else { return "" }
-        return js
+              let source = try? String(contentsOf: url, encoding: .utf8), !source.isEmpty else { return nil }
+        return WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: true)
     }()
 
     func makeNSView(context: Context) -> WKWebView {
@@ -82,6 +78,10 @@ struct WebPreview: NSViewRepresentable {
 #endif
         config.userContentController.add(context.coordinator, name: "headingInView")
         config.userContentController.add(context.coordinator, name: "previewScroll")
+        if let mermaid = Self.mermaidUserScript {
+            config.userContentController.addUserScript(mermaid)
+        }
+        config.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
 
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
@@ -92,24 +92,37 @@ struct WebPreview: NSViewRepresentable {
 
     func updateNSView(_ webView: WKWebView, context: Context) {
         context.coordinator.webView = webView
-        
+        context.coordinator.onScroll = onScroll
+        applyAppearance(to: webView, theme: appTheme)
+
         let needsFullReload = context.coordinator.lastCSS != css
-                             || context.coordinator.lastBasePath != basePath
+                             || context.coordinator.lastDocumentBaseURL != baseURL
+                             || context.coordinator.lastScrollSessionKey != scrollSessionKey
                              || context.coordinator.lastAppTheme != appTheme
                              || context.coordinator.lastBody != html
 
         if needsFullReload && !html.isEmpty {
             context.coordinator.lastCSS = css
-            context.coordinator.lastBasePath = basePath
+            context.coordinator.lastDocumentBaseURL = baseURL
+            context.coordinator.lastScrollSessionKey = scrollSessionKey
             context.coordinator.lastAppTheme = appTheme
             context.coordinator.lastBody = html
 
-            let fullHTML = wrapInHTMLTemplate(body: html, css: css, basePath: basePath)
-            webView.loadHTMLString(fullHTML, baseURL: baseURL)
+            let fullHTML = wrapInHTMLTemplate(
+                body: html,
+                css: css,
+                documentBaseURL: baseURL,
+                scrollSessionKey: scrollSessionKey
+            )
+            context.coordinator.loadPreview(html: fullHTML, in: webView, baseURL: baseURL)
         }
 
         if context.coordinator.scrollObserver == nil {
             context.coordinator.setupScrollListener()
+        }
+
+        if let scrollSyncCommand {
+            context.coordinator.applyScrollCommandIfNeeded(scrollSyncCommand, in: webView)
         }
     }
 
@@ -124,16 +137,32 @@ struct WebPreview: NSViewRepresentable {
 
     // MARK: - HTML Template
 
-    private func wrapInHTMLTemplate(body: String, css: String, basePath: String) -> String {
+    /// `file://` base for resolving relative links in the preview.
+    private func documentBaseHref(for documentBaseURL: URL?) -> String {
+        guard let documentBaseURL else { return "" }
+        var href = documentBaseURL.absoluteString
+        if !href.hasSuffix("/") { href += "/" }
+        return href.replacingOccurrences(of: "\"", with: "&quot;")
+    }
+
+    private func jsStringLiteral(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "'", with: "\\'")
+    }
+
+    private func wrapInHTMLTemplate(
+        body: String,
+        css: String,
+        documentBaseURL: URL?,
+        scrollSessionKey: String
+    ) -> String {
+        let baseHref = documentBaseHref(for: documentBaseURL)
         let mmThemeString = switch appTheme {
             case .dark: "dark"
             case .light: "default"
             case .system: "auto"
         }
-        let mermaidScriptTag: String = {
-            let js = Self.mermaidJS
-            return js.isEmpty ? "" : "<script>\(js)</script>"
-        }()
         return """
         <!DOCTYPE html>
         <html>
@@ -141,9 +170,8 @@ struct WebPreview: NSViewRepresentable {
             <meta charset="utf-8">
             <meta name="viewport" content="width=device-width, initial-scale=1">
             <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src file: data: https: http:; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
-            <base href="\(basePath.replacingOccurrences(of: "\"", with: "&quot;"))">
+            <base href="\(baseHref)">
             <link rel="icon" href="data:,">
-            \(mermaidScriptTag)
             <style>
             \(css)
             html { scroll-behavior: smooth; }
@@ -177,40 +205,58 @@ struct WebPreview: NSViewRepresentable {
             \(body)
             </article>
             <script>
-            function observeHeadings() {
-                if (typeof observer === 'undefined') return;
-                observer.disconnect();
-                document.querySelectorAll('h1, h2, h3, h4, h5, h6').forEach(h => {
-                    if (h.id) observer.observe(h);
-                });
-            }
-
-            function updateContent(newHTML) {
-                const container = document.getElementById('content');
-                if (container) {
-                    container.innerHTML = newHTML;
-                    observeHeadings();
-                }
-            }
-
             function scrollToAnchor(id) {
                 const el = document.getElementById(id);
                 if (el) {
                     const offset = el.getBoundingClientRect().top + window.pageYOffset - 20;
-                    window.scrollTo({ top: offset, behavior: 'smooth' });
+                    window.scrollTo({ top: offset, behavior: 'auto' });
                 }
             }
 
-            // Preserve scroll position across updates
-            var scrollKey = 'mdviewer_scroll';
+            /// Editor→preview scroll sync (called from Swift).
+            function mdviewerScrollToPercent(pct) {
+                const p = Math.min(1, Math.max(0, Number(pct) || 0));
+                const scroller = document.scrollingElement || document.documentElement || document.body;
+                const maxScroll = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+                const target = maxScroll * p;
+                scroller.scrollTop = target;
+                window.scrollTo(0, target);
+                return { top: scroller.scrollTop, y: window.scrollY, maxScroll: maxScroll, target: target, pct: p };
+            }
+
+            /// Apply editor-driven scroll without echoing back to Swift.
+            function mdviewerApplyRemoteScroll(pct) {
+                window.__mdviewerSuppressScrollReport = true;
+                const result = mdviewerScrollToPercent(pct);
+                requestAnimationFrame(function() {
+                    window.__mdviewerSuppressScrollReport = false;
+                });
+                return result;
+            }
+
+            // Preserve scroll position across updates (per document)
+            var scrollKey = 'mdviewer_scroll_\(jsStringLiteral(scrollSessionKey))';
             var saved = sessionStorage.getItem(scrollKey);
             if (saved) window.scrollTo(0, parseInt(saved));
+            var lastReportedPreviewPct = -1;
+            var previewScrollReportScheduled = false;
             window.addEventListener('scroll', function() {
-                sessionStorage.setItem(scrollKey, window.scrollY);
-                // Report scroll percentage to Swift for editor sync
-                var pct = window.scrollY / (document.body.scrollHeight - window.innerHeight);
-                window.webkit.messageHandlers.previewScroll.postMessage(isNaN(pct) ? 0 : pct);
-            });
+                const scroller = document.scrollingElement || document.documentElement || document.body;
+                sessionStorage.setItem(scrollKey, String(scroller.scrollTop));
+                if (window.__mdviewerSuppressScrollReport) return;
+                if (previewScrollReportScheduled) return;
+                previewScrollReportScheduled = true;
+                requestAnimationFrame(function() {
+                    previewScrollReportScheduled = false;
+                    if (window.__mdviewerSuppressScrollReport) return;
+                    const maxScroll = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+                    const pct = maxScroll > 0 ? scroller.scrollTop / maxScroll : 0;
+                    if (!Number.isFinite(pct)) return;
+                    if (Math.abs(pct - lastReportedPreviewPct) < \(ScrollSync.minPercentDelta)) return;
+                    lastReportedPreviewPct = pct;
+                    window.webkit.messageHandlers.previewScroll.postMessage(pct);
+                });
+            }, { passive: true });
 
             // Intersection Observer for heading tracking
             const observerOptions = { root: null, rootMargin: '-10% 0px -85% 0px', threshold: 0 };
@@ -223,16 +269,17 @@ struct WebPreview: NSViewRepresentable {
                     }
                 });
             }, observerOptions);
+            document.querySelectorAll('h1, h2, h3, h4, h5, h6').forEach(h => {
+                if (h.id) observer.observe(h);
+            });
 
-            observeHeadings();
-
-            // Mermaid diagram support
+            // Mermaid diagram support (mermaid.min.js is injected by WKUserScript before document start)
             var mmTheme = '\(mmThemeString)';
             if (mmTheme === 'auto') {
                 mmTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default';
             }
             if (typeof mermaid !== 'undefined') {
-                // securityLevel 'loose' is safe here — content is from user's own local files, rendered in sandboxed WKWebView
+                // securityLevel 'loose' is acceptable here: content is local user-authored Markdown rendered in WKWebView.
                 mermaid.initialize({ startOnLoad: false, theme: mmTheme, securityLevel: 'loose' });
             }
 
@@ -318,9 +365,6 @@ struct WebPreview: NSViewRepresentable {
             }
             requestAnimationFrame(highlightCode);
             requestAnimationFrame(renderMermaid);
-            // Re-run after dynamic content updates
-            var origUpdate = updateContent;
-            updateContent = function(html) { origUpdate(html); requestAnimationFrame(function() { highlightCode(); renderMermaid(); }); };
 
             function renderMermaid() {
                 if (typeof mermaid === 'undefined') return;
@@ -339,6 +383,17 @@ struct WebPreview: NSViewRepresentable {
         </body>
         </html>
         """
+    }
+
+    private func applyAppearance(to webView: WKWebView, theme: AppTheme) {
+        switch theme {
+        case .dark:
+            webView.appearance = NSAppearance(named: .darkAqua)
+        case .light:
+            webView.appearance = NSAppearance(named: .aqua)
+        case .system:
+            webView.appearance = nil
+        }
     }
 
     /// Inject explicit CSS variable overrides when user selects a specific theme.
@@ -369,12 +424,27 @@ struct WebPreview: NSViewRepresentable {
         private let commandScope: WindowCommandScope
         var lastBody: String = ""
         var lastCSS: String = ""
-        var lastBasePath: String = ""
+        var lastDocumentBaseURL: URL?
+        var lastScrollSessionKey: String?
         var lastAppTheme: AppTheme?
 
         weak var webView: WKWebView?
+        var onScroll: ((Double) -> Void)?
+        private var isApplyingRemoteScroll = false
+        private var remoteScrollResetTask: Task<Void, Never>?
+        private var lastAppliedScrollSequence: Int?
+        /// Latest editor scroll percent; reapplied after each preview HTML load finishes.
+        private var pendingEditorScrollPercent: Double?
+        private var isPageReady = false
+        private var scrollApplyTask: Task<Void, Never>?
+        private var lastAppliedLiveScrollPercent: Double = -1
+
+        /// Load preview HTML. Local images are inlined as data URLs in `DocumentViewModel`; `baseURL` resolves other relative links.
+        func loadPreview(html: String, in webView: WKWebView, baseURL: URL?) {
+            isPageReady = false
+            webView.loadHTMLString(html, baseURL: baseURL)
+        }
         nonisolated(unsafe) var scrollObserver: (any NSObjectProtocol)?
-        nonisolated(unsafe) var editorScrollObserver: (any NSObjectProtocol)?
 
         init(commandScope: WindowCommandScope) {
             self.commandScope = commandScope
@@ -389,11 +459,8 @@ struct WebPreview: NSViewRepresentable {
                 )
             }
             if message.name == "previewScroll", let percent = message.body as? Double {
-                NotificationCenter.default.post(
-                    name: .previewDidScroll,
-                    object: commandScope,
-                    userInfo: ["percent": percent]
-                )
+                guard !isApplyingRemoteScroll else { return }
+                onScroll?(percent)
             }
         }
 
@@ -409,29 +476,34 @@ struct WebPreview: NSViewRepresentable {
                     }
                 }
             }
-            // Sync: editor scroll -> preview
-            editorScrollObserver = NotificationCenter.default.addObserver(
-                forName: .editorDidScroll,
-                object: commandScope,
-                queue: .main
-            ) { [weak self] notification in
-                if let percent = notification.userInfo?["percent"] as? Double {
-                    Task { @MainActor in
-                        _ = try? await self?.webView?.evaluateJavaScript(
-                            "window.scrollTo({top: document.body.scrollHeight * \(percent), behavior: 'auto'})"
-                        )
-                    }
-                }
+        }
+
+        func applyScrollCommandIfNeeded(_ command: ScrollSyncCommand, in webView: WKWebView) {
+            guard command.source == .editor else { return }
+            guard lastAppliedScrollSequence != command.sequence else { return }
+            lastAppliedScrollSequence = command.sequence
+            pendingEditorScrollPercent = command.percent
+
+            if !isPageReady && !webView.isLoading {
+                isPageReady = true
             }
+            if webView.isLoading || !isPageReady {
+                return
+            }
+            applyLiveEditorScroll(command.percent, in: webView)
         }
 
         deinit {
+            remoteScrollResetTask?.cancel()
+            scrollApplyTask?.cancel()
             if let observer = scrollObserver {
                 NotificationCenter.default.removeObserver(observer)
             }
-            if let observer = editorScrollObserver {
-                NotificationCenter.default.removeObserver(observer)
-            }
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            isPageReady = true
+            applyScrollAfterNavigation(in: webView)
         }
 
         func webView(
@@ -446,6 +518,142 @@ struct WebPreview: NSViewRepresentable {
             } else {
                 decisionHandler(.allow)
             }
+        }
+
+        private func scheduleRemoteScrollReset() {
+            remoteScrollResetTask?.cancel()
+            remoteScrollResetTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(ScrollSync.remoteScrollGuardMs))
+                self?.isApplyingRemoteScroll = false
+            }
+        }
+
+        /// Live editor drag: single JS apply, no retry sleeps, no native double-scroll.
+        private func applyLiveEditorScroll(_ percent: Double, in webView: WKWebView) {
+            let clamped = min(1.0, max(0.0, percent))
+            guard abs(clamped - lastAppliedLiveScrollPercent) >= ScrollSync.minPercentDelta else { return }
+
+            scrollApplyTask?.cancel()
+            isApplyingRemoteScroll = true
+            scheduleRemoteScrollReset()
+
+            scrollApplyTask = Task { @MainActor [webView] in
+                if let metrics = await runJavaScriptScroll(clamped, in: webView, suppressReport: true),
+                   metrics.maxScroll > 1 {
+                    lastAppliedLiveScrollPercent = clamped
+                    return
+                }
+                applyNativeScroll(clamped, in: webView, jsTarget: nil)
+                lastAppliedLiveScrollPercent = clamped
+            }
+        }
+
+        /// After HTML reload: layout may settle late — retry a few times only here.
+        private func applyScrollAfterNavigation(in webView: WKWebView) {
+            guard let percent = pendingEditorScrollPercent else { return }
+
+            scrollApplyTask?.cancel()
+            scrollApplyTask = Task { @MainActor [webView] in
+                isApplyingRemoteScroll = true
+                defer { scheduleRemoteScrollReset() }
+
+                let clamped = min(1.0, max(0.0, percent))
+                for attempt in 1...4 {
+                    if Task.isCancelled { return }
+
+                    if let metrics = await runJavaScriptScroll(clamped, in: webView, suppressReport: true),
+                       metrics.maxScroll > 1 {
+                        lastAppliedLiveScrollPercent = clamped
+                        return
+                    }
+
+                    if attempt < 4 {
+                        try? await Task.sleep(for: .milliseconds(attempt == 1 ? 16 : 48))
+                    }
+                }
+
+                applyNativeScroll(clamped, in: webView, jsTarget: nil)
+                lastAppliedLiveScrollPercent = clamped
+            }
+        }
+
+        private struct JSScrollMetrics {
+            let maxScroll: Double
+            let target: Double
+        }
+
+        private func runJavaScriptScroll(
+            _ percent: Double,
+            in webView: WKWebView,
+            suppressReport: Bool
+        ) async -> JSScrollMetrics? {
+            let call = suppressReport
+                ? "mdviewerApplyRemoteScroll(\(percent))"
+                : "mdviewerScrollToPercent(\(percent))"
+            do {
+                let value = try await webView.evaluateJavaScript(call)
+                guard let dict = value as? [String: Any] else { return nil }
+                let maxScroll = (dict["maxScroll"] as? NSNumber)?.doubleValue ?? 0
+                let target = (dict["target"] as? NSNumber)?.doubleValue ?? 0
+                return JSScrollMetrics(maxScroll: maxScroll, target: target)
+            } catch {
+                return nil
+            }
+        }
+
+        /// Fallback when DOM scroll does not move the AppKit scroller (AX-visible). Uses JS `target` when available.
+        private func applyNativeScroll(_ percent: Double, in webView: WKWebView, jsTarget: Double?) {
+            guard let scrollView = Self.bestScrollView(in: webView) else {
+                AppLog.scroll.debug("PreviewView native scroll skipped: no usable NSScrollView in WKWebView tree")
+                return
+            }
+
+            let visibleHeight = scrollView.contentView.bounds.height
+            let documentHeight = scrollView.documentView?.frame.height
+                ?? scrollView.documentView?.bounds.height
+                ?? scrollView.contentView.documentRect.height
+            let scrollableHeight = max(0, documentHeight - visibleHeight)
+            guard scrollableHeight > 1 else {
+                AppLog.scroll.debug("PreviewView native scroll skipped: scrollableHeight=\(scrollableHeight, privacy: .public)")
+                return
+            }
+
+            let targetY: CGFloat
+            if let jsTarget, jsTarget > 0 {
+                targetY = CGFloat(min(jsTarget, scrollableHeight))
+            } else {
+                targetY = CGFloat(min(1.0, max(0.0, percent))) * scrollableHeight
+            }
+
+            AppLog.scroll.debug("PreviewView native scroll targetY=\(targetY, privacy: .public) scrollableHeight=\(scrollableHeight, privacy: .public)")
+            scrollView.contentView.scroll(to: NSPoint(x: 0, y: targetY))
+            scrollView.reflectScrolledClipView(scrollView.contentView)
+        }
+
+        /// Pick the scroll view with the largest scrollable document (not merely the first subview).
+        private static func bestScrollView(in root: NSView) -> NSScrollView? {
+            var best: NSScrollView?
+            var bestScrollable: CGFloat = 0
+
+            func visit(_ view: NSView) {
+                if let scrollView = view as? NSScrollView {
+                    let visible = scrollView.contentView.bounds.height
+                    let documentHeight = scrollView.documentView?.frame.height
+                        ?? scrollView.documentView?.bounds.height
+                        ?? scrollView.contentView.documentRect.height
+                    let scrollable = max(0, documentHeight - visible)
+                    if scrollable > bestScrollable {
+                        bestScrollable = scrollable
+                        best = scrollView
+                    }
+                }
+                for subview in view.subviews {
+                    visit(subview)
+                }
+            }
+
+            visit(root)
+            return best
         }
     }
 }

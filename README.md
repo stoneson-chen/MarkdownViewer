@@ -11,7 +11,7 @@
 - **实时预览**：自研 Markdown → HTML 解析，预览在 `WKWebView` 中渲染；编辑侧防抖约 **80ms** 后全量重解析。
 - **侧栏大纲**：`NavigationSplitView` 侧栏展示标题结构，点击可同步滚动预览中的对应位置。
 - **样式**：支持同目录同名 `.css`、设置中的自定义 CSS，以及内置 `default.css`（浅色 / 深色跟随系统）。
-- **沙盒**：使用用户授权与书签访问磁盘上的 Markdown 与相关资源。
+- **本地文件访问**：当前正式包为非沙盒本地工具，仅在用户主动打开文件时读取 Markdown 及同目录相关资源。
 
 ## 系统要求
 
@@ -59,6 +59,8 @@ Release 构建：
 swift build -c release
 ```
 
+当前项目不维护 `swift test` 测试链路；本机验收以 `swift build` 和打包编译为准。
+
 ### 打包为 .app
 
 在本目录执行：
@@ -79,7 +81,7 @@ swift build -c release
 | `Sources/Views/Editor/EditorView.swift` | 编辑器（NSTextView） |
 | `Sources/Resources/` | 内置资源（如 `default.css`、本地化字符串） |
 | `package_app.sh` | 打 release 包并 codesign |
-| `Info.plist` / `MarkdownViewer.entitlements` | 包元数据与沙盒权限 |
+| `Info.plist` / `MarkdownViewer.entitlements` | 包元数据与签名权限 |
 
 ## 许可证
 

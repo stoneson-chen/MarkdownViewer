@@ -24,9 +24,16 @@ private enum EditorFormatActions {
 struct EditorView: View {
     @Binding var text: String
     let commandScope: WindowCommandScope
+    let scrollSyncCommand: ScrollSyncCommand?
+    let onScroll: (Double) -> Void
 
     var body: some View {
-        MarkdownTextEditor(text: $text, commandScope: commandScope)
+        MarkdownTextEditor(
+            text: $text,
+            commandScope: commandScope,
+            scrollSyncCommand: scrollSyncCommand,
+            onScroll: onScroll
+        )
             .background(Color(nsColor: .textBackgroundColor))
     }
 }
@@ -36,6 +43,8 @@ struct EditorView: View {
 struct MarkdownTextEditor: NSViewRepresentable {
     @Binding var text: String
     let commandScope: WindowCommandScope
+    let scrollSyncCommand: ScrollSyncCommand?
+    let onScroll: (Double) -> Void
     @AppStorage("editorFontSize") private var fontSize: Double = 14
 
     func makeCoordinator() -> Coordinator {
@@ -81,6 +90,7 @@ struct MarkdownTextEditor: NSViewRepresentable {
         scrollView.hasHorizontalScroller = false
         scrollView.autohidesScrollers = true
         scrollView.drawsBackground = false
+        scrollView.contentView.postsBoundsChangedNotifications = true
 
         context.coordinator.textView = textView
         context.coordinator.scrollView = scrollView
@@ -91,12 +101,26 @@ struct MarkdownTextEditor: NSViewRepresentable {
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? NSTextView else { return }
+        context.coordinator.parent = self
 
         // Only update if text actually changed externally (avoid feedback loop)
         if textView.string != text {
             let selectedRanges = textView.selectedRanges
             textView.string = text
-            textView.selectedRanges = selectedRanges
+            textView.selectedRanges = clampedRanges(selectedRanges, maxLength: (text as NSString).length)
+        }
+
+        if let scrollSyncCommand {
+            context.coordinator.applyScrollCommandIfNeeded(scrollSyncCommand)
+        }
+    }
+
+    private func clampedRanges(_ ranges: [NSValue], maxLength: Int) -> [NSValue] {
+        ranges.map { value in
+            let range = value.rangeValue
+            let location = min(range.location, maxLength)
+            let length = min(range.length, maxLength - location)
+            return NSValue(range: NSRange(location: location, length: length))
         }
     }
 
@@ -108,7 +132,10 @@ struct MarkdownTextEditor: NSViewRepresentable {
         weak var textView: NSTextView?
         weak var scrollView: NSScrollView?
         private nonisolated(unsafe) var notificationObservers: [any NSObjectProtocol] = []
-        private var isSyncing = false
+        private var isApplyingRemoteScroll = false
+        private var remoteScrollResetTask: Task<Void, Never>?
+        private var lastAppliedScrollSequence: Int?
+        private var lastReportedScrollPercent: Double = -1
 
         init(_ parent: MarkdownTextEditor) {
             self.parent = parent
@@ -117,57 +144,77 @@ struct MarkdownTextEditor: NSViewRepresentable {
         }
 
         deinit {
+            remoteScrollResetTask?.cancel()
             notificationObservers.forEach { NotificationCenter.default.removeObserver($0) }
         }
 
         func setupScrollSync() {
             guard let scrollView = scrollView else { return }
-            // Observe editor scroll to notify preview
+            // `didLiveScroll` alone is enough; avoid duplicate `boundsDidChange` events.
             notificationObservers.append(
                 NotificationCenter.default.addObserver(
-                    forName: NSView.boundsDidChangeNotification,
-                    object: scrollView.contentView,
+                    forName: NSScrollView.didLiveScrollNotification,
+                    object: scrollView,
                     queue: .main
                 ) { [weak self] _ in
                     Task { @MainActor in self?.editorDidScroll() }
                 }
             )
-            // Observe preview scroll to sync editor
-            notificationObservers.append(
-                NotificationCenter.default.addObserver(
-                    forName: .previewDidScroll,
-                    object: parent.commandScope,
-                    queue: .main
-                ) { [weak self] notification in
-                    let percent = notification.userInfo?["percent"] as? Double ?? 0
-                    Task { @MainActor in self?.syncToPreview(percent) }
-                }
-            )
         }
 
         private func editorDidScroll() {
-            guard !isSyncing, let scrollView = scrollView, let textView = textView else { return }
+            guard !isApplyingRemoteScroll, let scrollView = scrollView, let textView = textView else { return }
             let visibleRect = scrollView.contentView.bounds
-            let totalHeight = textView.bounds.height
-            guard totalHeight > 0 else { return }
-            let percent = min(1.0, max(0.0, visibleRect.minY / (totalHeight - visibleRect.height)))
-            isSyncing = true
-            NotificationCenter.default.post(
-                name: .editorDidScroll,
-                object: parent.commandScope,
-                userInfo: ["percent": percent]
-            )
-            DispatchQueue.main.async { [weak self] in self?.isSyncing = false }
+            let totalHeight = documentHeight(for: textView)
+            let scrollableHeight = totalHeight - visibleRect.height
+            guard scrollableHeight > 0 else { return }
+            let percent = min(1.0, max(0.0, visibleRect.minY / scrollableHeight))
+            guard abs(percent - lastReportedScrollPercent) >= ScrollSync.minPercentDelta else { return }
+            lastReportedScrollPercent = percent
+            parent.onScroll(percent)
         }
 
-        private func syncToPreview(_ percent: Double) {
-            guard !isSyncing, let scrollView = scrollView, let textView = textView else { return }
-            let totalHeight = textView.bounds.height
+        func applyScrollCommandIfNeeded(_ command: ScrollSyncCommand) {
+            guard command.source == .preview else { return }
+            guard lastAppliedScrollSequence != command.sequence else { return }
+            lastAppliedScrollSequence = command.sequence
+            AppLog.scroll.debug("EditorView apply remote scroll percent=\(command.percent, privacy: .public) sequence=\(command.sequence, privacy: .public)")
+            applyRemoteScroll(command.percent)
+        }
+
+        private func applyRemoteScroll(_ percent: Double) {
+            guard let scrollView = scrollView, let textView = textView else { return }
+            let clampedPercent = min(1.0, max(0.0, percent))
+            guard abs(clampedPercent - lastReportedScrollPercent) >= ScrollSync.minPercentDelta else { return }
+
+            let totalHeight = documentHeight(for: textView)
             let visibleHeight = scrollView.contentView.bounds.height
-            let targetY = percent * (totalHeight - visibleHeight)
-            isSyncing = true
-            textView.scroll(NSPoint(x: 0, y: targetY))
-            DispatchQueue.main.async { [weak self] in self?.isSyncing = false }
+            let scrollableHeight = max(0, totalHeight - visibleHeight)
+            let targetY = clampedPercent * scrollableHeight
+            isApplyingRemoteScroll = true
+            lastReportedScrollPercent = clampedPercent
+            scrollView.contentView.scroll(to: NSPoint(x: 0, y: targetY))
+            scrollView.reflectScrolledClipView(scrollView.contentView)
+            scheduleRemoteScrollReset()
+        }
+
+        private func documentHeight(for textView: NSTextView) -> CGFloat {
+            guard let layoutManager = textView.layoutManager,
+                  let textContainer = textView.textContainer else {
+                return textView.bounds.height
+            }
+
+            layoutManager.ensureLayout(for: textContainer)
+            let usedHeight = layoutManager.usedRect(for: textContainer).height + textView.textContainerInset.height * 2
+            return max(textView.bounds.height, usedHeight)
+        }
+
+        private func scheduleRemoteScrollReset() {
+            remoteScrollResetTask?.cancel()
+            remoteScrollResetTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(ScrollSync.remoteScrollGuardMs))
+                self?.isApplyingRemoteScroll = false
+            }
         }
 
         func textDidChange(_ notification: Notification) {

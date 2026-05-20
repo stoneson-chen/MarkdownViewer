@@ -31,6 +31,8 @@ struct MarkdownViewerApp: App {
         Window(String(localized: "menu.about", bundle: .appResources), id: "about") {
             AboutView()
                 .preferredColorScheme(appTheme.colorScheme)
+                .onAppear { applyAppAppearance(appTheme) }
+                .onChange(of: appTheme) { _, theme in applyAppAppearance(theme) }
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
@@ -41,13 +43,29 @@ struct MarkdownViewerApp: App {
             .frame(minWidth: 600, minHeight: 400)
             .preferredColorScheme(appTheme.colorScheme)
             .onAppear {
+                applyAppAppearance(appTheme)
                 AppDelegate.requestDocumentWindow = {
                     openWindow(id: "document")
                 }
             }
+            .onChange(of: appTheme) { _, theme in
+                applyAppAppearance(theme)
+            }
             .onReceive(NotificationCenter.default.publisher(for: .showAboutWindow)) { _ in
                 openWindow(id: "about")
             }
+    }
+
+    /// `preferredColorScheme(nil)` alone does not always restore Aqua when leaving forced dark; sync AppKit appearance.
+    private func applyAppAppearance(_ theme: AppTheme) {
+        switch theme {
+        case .system:
+            NSApp.appearance = nil
+        case .light:
+            NSApp.appearance = NSAppearance(named: .aqua)
+        case .dark:
+            NSApp.appearance = NSAppearance(named: .darkAqua)
+        }
     }
 }
 

@@ -94,7 +94,7 @@
 - **No Information Collection**: The app does not require user registration or login, and does not collect any personal information such as name, email, or location.
 - **Local Processing**: All Markdown parsing, rendering, and storage are done locally on your device. Data is never uploaded to any server.
 - **No Trackers**: The app does not contain any third-party SDKs, advertising plugins, or analytics tools.
-- **File Access**: The app only accesses specific files or folders when you explicitly authorize it via the file picker or drag-and-drop.
+- **File Access**: The current release is a non-sandboxed local tool. It reads Markdown and related same-directory resources only when you open a file.
 
 ## Contact Us
 

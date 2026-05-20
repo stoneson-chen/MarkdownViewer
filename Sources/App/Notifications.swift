@@ -8,8 +8,34 @@
 // * See the LICENSE file in the project root for full license text.
 
 import Foundation
+import OSLog
 
 final class WindowCommandScope: NSObject {}
+
+enum AppLog {
+    static let scroll = Logger(subsystem: "org.chenxx.markdown.viewer", category: "scroll")
+}
+
+struct ScrollSyncCommand: Equatable {
+    enum Source {
+        case editor
+        case preview
+    }
+
+    let source: Source
+    let percent: Double
+    let sequence: Int
+}
+
+/// Tuning knobs for editor ↔ preview scroll mirroring.
+enum ScrollSync {
+    /// Ignore sub-pixel percent noise (reduces command spam).
+    static let minPercentDelta = 0.004
+    /// Coalesce outgoing sync commands to ~60 Hz.
+    static let coalesceIntervalMs = 16
+    /// Block reverse sync while a remote scroll is being applied.
+    static let remoteScrollGuardMs = 250
+}
 
 extension Notification.Name {
     // MARK: - Editor Formatting
@@ -26,9 +52,6 @@ extension Notification.Name {
     static let showAboutWindow = Notification.Name("showAboutWindow")
 
     // MARK: - Navigation & Sync
-    static let scrollToHeading = Notification.Name("scrollToHeading")
     static let didDetectHeading = Notification.Name("didDetectHeading")
     static let executeScrollJS = Notification.Name("executeScrollJS")
-    static let editorDidScroll = Notification.Name("editorDidScroll")
-    static let previewDidScroll = Notification.Name("previewDidScroll")
 }

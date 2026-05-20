@@ -14,9 +14,6 @@ import SwiftUI
 @Observable
 @MainActor
 final class DocumentViewModel {
-    // MARK: - Services
-
-    let fileService = FileService()
     // MARK: - Content State
 
     /// The markdown source text
@@ -24,11 +21,11 @@ final class DocumentViewModel {
 
     /// Rendered HTML for the WKWebView preview
     private(set) var renderedHTML: String = ""
-    private(set) var wordCount: Int = 0
+    private(set) var previewCSS: String = ""
     private(set) var characterCount: Int = 0
     private(set) var headings: [MarkdownParser.Heading] = []
     private(set) var isRendering = false
-    
+
     /// 当前正在阅读的标题 ID（用于侧边栏高亮）
     var activeHeadingID: String?
 
@@ -36,7 +33,12 @@ final class DocumentViewModel {
 
     /// Currently opened file URL; nil when showing default README
     var fileURL: URL? {
-        didSet { updateWindowTitle(); _cachedCSS = nil; _cachedBase = nil }
+        didSet {
+            updateWindowTitle()
+            _cachedCSS = nil
+            _cachedBaseURL = nil
+            Task { await refreshCSS() }
+        }
     }
 
     /// Whether the document has unsaved changes
@@ -56,7 +58,10 @@ final class DocumentViewModel {
     /// Custom CSS file URL for preview styling (from Settings)
     @ObservationIgnored
     @AppStorage("userCustomCSSPath") var customCSSPath: String = "" {
-        didSet { _cachedCSS = nil }
+        didSet {
+            _cachedCSS = nil
+            Task { await refreshCSS() }
+        }
     }
 
     /// Window title
@@ -95,24 +100,11 @@ final class DocumentViewModel {
     private var debounceTask: Task<Void, Never>?
     private var pendingOpenURL: URL?
     private var _cachedCSS: String?
-    private var _cachedBase: (baseURL: URL?, basePath: String)?
+    private var _cachedBaseURL: URL?
     private var originalText: String = ""
     private var parseRevision = 0
-
-    /// Bumps when a new on-disk file load should own sidebar security scope / completion.
-    private var sidebarDirLoadGeneration = 0
-    /// Keeps `startAccessingSecurityScopedResource` active on the opened document while the sidebar enumerates its parent directory (see `FileService.loadFolder`).
-    private var retainedSidebarSecurityFileURL: URL?
-
-    private enum DefaultsKey {
-        static let customCSSBookmark = "userCustomCSSBookmark"
-    }
-
-    init() {
-        fileService.onFolderDidChange = { [weak self] in
-            self?._cachedBase = nil
-        }
-    }
+    /// Bumps on each `openFile` so stale async loads cannot overwrite the current document.
+    private var openGeneration = 0
 
     // MARK: - Lifecycle
 
@@ -121,7 +113,7 @@ final class DocumentViewModel {
         // If a file was already opened, don't overwrite it.
         if fileURL != nil { return }
 
-        if let url = AppDelegate.consumeQueuedOpenURL() {
+        if let url = Self.lastQueuedOpenURL() {
             openFile(url)
             return
         }
@@ -141,7 +133,7 @@ final class DocumentViewModel {
         try? await Task.sleep(for: .milliseconds(250))
         guard fileURL == nil else { return }
 
-        if let url = AppDelegate.consumeQueuedOpenURL() {
+        if let url = Self.lastQueuedOpenURL() {
             openFile(url)
             return
         }
@@ -154,7 +146,6 @@ final class DocumentViewModel {
 
     /// Load the bundled README.md
     func loadDefaultReadme() {
-        endRetainedSidebarSecurityScope()
         if let url = Bundle.appResources.url(forResource: "README", withExtension: "md"),
            let content = try? String(contentsOf: url, encoding: .utf8) {
             text = content
@@ -172,52 +163,39 @@ final class DocumentViewModel {
     /// Open a file from URL
     func openFile(_ url: URL) {
         let target = url.standardized
-        if fileURL?.standardized == target {
-            _ = syncFolderSidebar(for: target, parentURL: nil, retainedAccessGeneration: nil)
-            return
-        }
+        if fileURL?.standardized == target { return }
         if pendingOpenURL == target { return }
 
         debounceTask?.cancel()
         parseRevision += 1
+        openGeneration += 1
+        let generation = openGeneration
         pendingOpenURL = target
 
         Task {
             do {
-                defer { pendingOpenURL = nil }
-                
-                // Perform file access and reading on a background task
-                let (content, parentURL) = try await Task.detached(priority: .userInitiated) {
-                    try Self.withSecurityScopedAccess(to: target) {
-                        let data = try String(contentsOf: target, encoding: .utf8)
-                        let parent = target.deletingLastPathComponent()
-                        return (data, parent)
-                    }
+                defer {
+                    if pendingOpenURL == target { pendingOpenURL = nil }
+                }
+
+                let content = try await Task.detached(priority: .userInitiated) {
+                    try String(contentsOf: target, encoding: .utf8)
                 }.value
+
+                guard generation == openGeneration else { return }
 
                 self.text = content
                 self.fileURL = target
                 self.originalText = content
                 self.isDirty = false
                 self.isRendering = true
+                self.characterCount = content.count
 
-                // Phase 1: fast partial preview (MainActor)
-                let quick = parser.parseFirstChunk(content, lineLimit: 200)
-                renderedHTML = quick.html
-                characterCount = content.count
-
-                // Phase 2: full parse on background
                 let revision = nextParseRevision()
-                Task { await runAsyncParse(content, skipWordCount: false, revision: revision) }
-
-                sidebarDirLoadGeneration += 1
-                let loadGen = sidebarDirLoadGeneration
-                beginRetainedSidebarSecurityScope(for: target)
-                let scheduled = syncFolderSidebar(for: target, parentURL: parentURL, retainedAccessGeneration: loadGen)
-                if !scheduled {
-                    endRetainedSidebarSecurityScope()
-                }
+                await runAsyncParse(content, revision: revision)
             } catch {
+                guard generation == openGeneration else { return }
+                isRendering = false
                 errorMessage = String(localized: "error.open", bundle: .appResources) + ": " + error.localizedDescription
             }
         }
@@ -243,14 +221,15 @@ final class DocumentViewModel {
             return
         }
 
-        do {
-            try Self.withSecurityScopedAccess(to: url) {
-                try text.write(to: url, atomically: true, encoding: .utf8)
+        let snapshot = text
+        Task {
+            do {
+                try await Self.writeText(snapshot, to: url)
+                originalText = snapshot
+                isDirty = (text != snapshot)
+            } catch {
+                errorMessage = String(localized: "error.save", bundle: .appResources) + error.localizedDescription
             }
-            originalText = text
-            isDirty = false
-        } catch {
-            errorMessage = String(localized: "error.save", bundle: .appResources) + error.localizedDescription
         }
     }
 
@@ -262,15 +241,19 @@ final class DocumentViewModel {
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
-        do {
-            try Self.withSecurityScopedAccess(to: url) {
-                try text.write(to: url, atomically: true, encoding: .utf8)
+        let snapshot = text
+        Task {
+            do {
+                try await Self.writeText(snapshot, to: url)
+                fileURL = url
+                originalText = snapshot
+                isDirty = (text != snapshot)
+                let revision = nextParseRevision()
+                isRendering = true
+                await runAsyncParse(text, revision: revision)
+            } catch {
+                errorMessage = String(localized: "error.saveAs", bundle: .appResources) + error.localizedDescription
             }
-            fileURL = url
-            originalText = text
-            isDirty = false
-        } catch {
-            errorMessage = String(localized: "error.saveAs", bundle: .appResources) + error.localizedDescription
         }
     }
 
@@ -285,46 +268,33 @@ final class DocumentViewModel {
         debounceTask = Task {
             try? await Task.sleep(for: .milliseconds(80))
             guard !Task.isCancelled else { return }
-            await parseFull(skipWordCount: false)
+            let revision = nextParseRevision()
+            isRendering = true
+            await runAsyncParse(text, revision: revision)
         }
     }
 
-    /// Progressive: sync Phase 1 for instant preview, then async Phase 2.
+    /// Single async parse path. Parsing **and** image base64 inlining run off-main to keep typing/scrolling smooth.
     private func parseProgressive() async {
-        let markdown = self.text
-
-        // Phase 1: SYNC on MainActor — limited lines for instant response
-        let quick = parser.parseFirstChunk(markdown, lineLimit: 50)
-        renderedHTML = quick.html
-        characterCount = markdown.count
-
-        // Phase 2: full parse on background
+        characterCount = text.count
         isRendering = true
         let revision = nextParseRevision()
-        await runAsyncParse(markdown, skipWordCount: false, revision: revision)
+        await runAsyncParse(text, revision: revision)
     }
 
-    private func parseFull(skipWordCount: Bool) async {
-        let markdown = self.text
-        let revision = nextParseRevision()
-        isRendering = true
-        await runAsyncParse(markdown, skipWordCount: skipWordCount, revision: revision)
-    }
-
-    /// Shared async parse runner — single code path for all full-parse calls.
-    private func runAsyncParse(_ markdown: String, skipWordCount: Bool, revision: Int) async {
+    private func runAsyncParse(_ markdown: String, revision: Int) async {
         let parser = self.parser
-        let result = await Task.detached(priority: .userInitiated) {
-            await parser.parse(markdown, skipWordCount: skipWordCount)
+        let directory = fileURL?.deletingLastPathComponent()
+        let (html, characters, headings) = await Task.detached(priority: .userInitiated) {
+            let result = parser.parse(markdown)
+            let embedded = Self.resolveLocalImageSources(in: result.html, relativeTo: directory)
+            return (embedded, result.characterCount, result.headings)
         }.value
 
         guard revision == parseRevision else { return }
-        renderedHTML = result.html
-        if !skipWordCount {
-            wordCount = result.wordCount
-        }
-        characterCount = result.characterCount
-        headings = result.headings
+        renderedHTML = html
+        characterCount = characters
+        self.headings = headings
         isRendering = false
     }
     // MARK: - View Toggles
@@ -346,46 +316,51 @@ final class DocumentViewModel {
     /// Request a scroll to a specific heading in the preview.
     func scrollToHeading(_ heading: MarkdownParser.Heading, scope: WindowCommandScope) {
         NotificationCenter.default.post(
-            name: .scrollToHeading,
+            name: .executeScrollJS,
             object: scope,
             userInfo: ["anchorID": heading.anchorID]
         )
     }
 
     // MARK: - CSS Resolution
-    
+
     /// Resolve the CSS to use for preview: per-file CSS → settings CSS → default
-    func resolvedCSS() -> String {
-        if let cached = _cachedCSS { return cached }
-        let css: String
-        // 1. Check for per-file CSS (same name, .css extension)
+    private func refreshCSS() async {
+        if let cached = _cachedCSS {
+            previewCSS = cached
+            return
+        }
+
+        let fileURL = self.fileURL
+        let customCSSPath = self.customCSSPath
+        let css = await Task.detached(priority: .utility) {
+            Self.loadCSS(fileURL: fileURL, customCSSPath: customCSSPath)
+        }.value
+
+        guard self.fileURL == fileURL, self.customCSSPath == customCSSPath else { return }
+        if !css.isEmpty {
+            _cachedCSS = css
+        }
+        previewCSS = css
+    }
+
+    nonisolated private static func loadCSS(fileURL: URL?, customCSSPath: String) -> String {
+        // 1. Per-file CSS (same basename, .css extension, same directory)
         if let fileURL = fileURL {
             let cssURL = fileURL.deletingPathExtension().appendingPathExtension("css")
-            if let perFileCSS = try? Self.withSecurityScopedAccess(to: fileURL, {
-                try String(contentsOf: cssURL, encoding: .utf8)
-            }) {
-                css = perFileCSS
-                _cachedCSS = css
-                return css
+            if let perFileCSS = try? String(contentsOf: cssURL, encoding: .utf8) {
+                return perFileCSS
             }
         }
-        // 2. Check settings custom CSS path
-        if let cssURL = Self.resolveSecurityScopedBookmark(forKey: DefaultsKey.customCSSBookmark)
-            ?? (!customCSSPath.isEmpty ? URL(fileURLWithPath: customCSSPath) : nil) {
-            if let userCSS = try? Self.withSecurityScopedAccess(to: cssURL, {
-                try String(contentsOf: cssURL, encoding: .utf8)
-            }) {
-                css = userCSS
-                _cachedCSS = css
-                return css
-            }
+        // 2. User-configured custom CSS path
+        if !customCSSPath.isEmpty,
+           let userCSS = try? String(contentsOf: URL(fileURLWithPath: customCSSPath), encoding: .utf8) {
+            return userCSS
         }
-        // 3. Default bundled CSS
+        // 3. Bundled default
         if let url = Bundle.appResources.url(forResource: "default", withExtension: "css"),
            let defaultCSS = try? String(contentsOf: url, encoding: .utf8) {
-            css = defaultCSS
-            _cachedCSS = css
-            return css
+            return defaultCSS
         }
         // Don't cache empty CSS — allows retry on next call
         return ""
@@ -393,43 +368,13 @@ final class DocumentViewModel {
 
     // MARK: - Base URL Resolution for Preview
 
-    /// Returns the (baseURL, basePath) for WKWebView.
-    /// baseURL is the highest authorized directory we can use as origin.
-    /// basePath is the relative path from baseURL to the markdown file's directory.
-    func resolveRenderingBase() -> (baseURL: URL?, basePath: String) {
-        if let cached = _cachedBase { return cached }
-        let result = computeRenderingBase()
-        _cachedBase = result
-        return result
-    }
-
-    private func computeRenderingBase() -> (baseURL: URL?, basePath: String) {
-        guard let fileURL = fileURL else { return (nil, "") }
-        
-        let fileDir = fileURL.deletingLastPathComponent().standardized
-        
-        // If we have a folder open in the sidebar, use it as root to allow relative paths above the file
-        if let rootURL = fileService.currentFolderURL?.standardized {
-            let rootPath = rootURL.path(percentEncoded: false)
-            let filePath = fileURL.path(percentEncoded: false)
-            
-            if Self.path(filePath, isInsideOrEqualTo: rootPath) {
-                // File is inside the root folder.
-                let fileDirPath = fileDir.path(percentEncoded: false)
-                let relativePath = String(fileDirPath.dropFirst(rootPath.count))
-                
-                let parts = relativePath.components(separatedBy: "/")
-                    .filter { !$0.isEmpty }
-                
-                let encodedParts = parts.map { $0.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? $0 }
-                let basePath = encodedParts.isEmpty ? "" : encodedParts.joined(separator: "/") + "/"
-                
-                return (rootURL, basePath)
-            }
-        }
-        
-        // Fallback: Use the file's directory as root
-        return (fileDir, "")
+    /// `file://` directory of the open document, used as WKWebView `baseURL`. `nil` for the default README.
+    func resolveRenderingBase() -> URL? {
+        if let cached = _cachedBaseURL { return cached }
+        guard let fileURL else { return nil }
+        let base = fileURL.deletingLastPathComponent().standardized
+        _cachedBaseURL = base
+        return base
     }
 
     // MARK: - Private Helpers
@@ -447,89 +392,170 @@ final class DocumentViewModel {
         return parseRevision
     }
 
-    @discardableResult
-    private func syncFolderSidebar(
-        for fileURL: URL,
-        parentURL: URL? = nil,
-        retainedAccessGeneration: Int? = nil
-    ) -> Bool {
-        let parentURL = (parentURL ?? fileURL.deletingLastPathComponent()).standardized
+    nonisolated private static func writeText(_ text: String, to url: URL) async throws {
+        try await Task.detached(priority: .userInitiated) {
+            try text.write(to: url, atomically: true, encoding: .utf8)
+        }.value
+    }
 
-        // Always create a minimal tree showing at least the current file.
-        // This guarantees the Files tab is never blank, even if async loadFolder fails.
-        if fileService.rootNode == nil || fileService.currentFolderURL?.standardized != parentURL {
-            fileService.setPlaceholderTree(for: parentURL, selectedFile: fileURL)
+    // MARK: - Local Image Inlining
+
+    /// Rewrites relative `<img src>` to data URLs, with a per-URL (mtime, dataURL) cache.
+    /// Runs off-main from `runAsyncParse`.
+    nonisolated static func resolveLocalImageSources(in html: String, relativeTo directory: URL?) -> String {
+        guard let directory, html.contains("<img") else { return html }
+
+        let nsHTML = html as NSString
+        let matches = Self.imgSrcRegex.matches(in: html, range: NSRange(location: 0, length: nsHTML.length))
+        guard !matches.isEmpty else { return html }
+
+        let mutable = NSMutableString(string: html)
+        for match in matches.reversed() where match.numberOfRanges > 2 {
+            let srcRange = match.range(at: 2)
+            let src = nsHTML.substring(with: srcRange)
+            guard let absolute = absoluteFileURL(forAssetPath: src, relativeTo: directory),
+                  let dataURL = cachedDataURL(for: absolute) else { continue }
+
+            let escaped = dataURL
+                .replacingOccurrences(of: "&", with: "&amp;")
+                .replacingOccurrences(of: "\"", with: "&quot;")
+            mutable.replaceCharacters(in: srcRange, with: escaped)
         }
+        return mutable as String
+    }
 
-        if let currentFolder = fileService.currentFolderURL?.standardized {
-            let currentPath = currentFolder.path(percentEncoded: false)
-            let filePath = fileURL.path(percentEncoded: false)
-            // Do not skip `loadFolder` while only a placeholder tree is shown (`rootNode != nil` alone is insufficient).
-            if Self.path(filePath, isInsideOrEqualTo: currentPath),
-               fileService.completedFolderLoadURL?.standardized == currentFolder,
-               fileService.rootNode != nil {
-                return false
+    // Pattern is fixed and well-tested; force-try to surface programmer errors at startup.
+    nonisolated private static let imgSrcRegex: NSRegularExpression =
+        try! NSRegularExpression(pattern: #"<img\s+([^>]*?\s+)?src="([^"]+)"([^>]*)>"#, options: .caseInsensitive)
+
+    /// Memoize base64 data URLs keyed by `(absolute path, modification date)`.
+    /// Re-parses on edit only redo the work for assets that actually changed.
+    nonisolated private struct AssetCacheEntry {
+        let mtime: Date
+        let dataURL: String
+        let byteCount: Int
+        let lastAccess: Int
+    }
+
+    nonisolated(unsafe) private static var assetCache: [URL: AssetCacheEntry] = [:]
+    nonisolated(unsafe) private static var assetCacheBytes = 0
+    nonisolated(unsafe) private static var assetCacheTick = 0
+    nonisolated private static let assetCacheLock = NSLock()
+    nonisolated private static let maxAssetCacheBytes = 32_000_000
+    nonisolated private static let maxAssetCacheEntries = 64
+
+    nonisolated private static func cachedDataURL(for fileURL: URL) -> String? {
+        let mtime = (try? FileManager.default.attributesOfItem(atPath: fileURL.path)[.modificationDate] as? Date)
+            ?? .distantPast
+
+        assetCacheLock.lock()
+        assetCacheTick += 1
+        let accessTick = assetCacheTick
+        let cached = assetCache[fileURL]
+        if let cached, cached.mtime == mtime {
+            assetCache[fileURL] = AssetCacheEntry(
+                mtime: cached.mtime,
+                dataURL: cached.dataURL,
+                byteCount: cached.byteCount,
+                lastAccess: accessTick
+            )
+            assetCacheLock.unlock()
+            return cached.dataURL
+        }
+        if let cached {
+            assetCacheBytes -= cached.byteCount
+            assetCache[fileURL] = nil
+        }
+        assetCacheLock.unlock()
+
+        switch loadAssetData(at: fileURL) {
+        case .success(let data):
+            let mime = mimeType(forPreviewAsset: fileURL.pathExtension)
+            let dataURL = "data:\(mime);base64,\(data.base64EncodedString())"
+            let byteCount = dataURL.utf8.count
+            assetCacheLock.lock()
+            assetCache[fileURL] = AssetCacheEntry(
+                mtime: mtime,
+                dataURL: dataURL,
+                byteCount: byteCount,
+                lastAccess: accessTick
+            )
+            assetCacheBytes += byteCount
+            pruneAssetCacheIfNeeded()
+            assetCacheLock.unlock()
+            return dataURL
+        case .failure(let error):
+            NSLog("[MarkdownViewer] failed to inline image '%@': %@", fileURL.path, error.localizedDescription)
+            return nil
+        }
+    }
+
+    nonisolated private static func pruneAssetCacheIfNeeded() {
+        while assetCache.count > maxAssetCacheEntries || assetCacheBytes > maxAssetCacheBytes {
+            guard let oldest = assetCache.min(by: { $0.value.lastAccess < $1.value.lastAccess }) else {
+                assetCacheBytes = 0
+                return
             }
+            assetCacheBytes -= oldest.value.byteCount
+            assetCache[oldest.key] = nil
+        }
+    }
+
+    nonisolated private static func absoluteFileURL(forAssetPath path: String, relativeTo directory: URL) -> URL? {
+        let trimmed = path.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return nil }
+
+        let lower = trimmed.lowercased()
+        if lower.hasPrefix("http://") || lower.hasPrefix("https://")
+            || lower.hasPrefix("data:") || lower.hasPrefix("file:") || lower.hasPrefix("mailto:") {
+            return nil
         }
 
-        let onLoadFinished: (@MainActor () -> Void)?
-        if let gen = retainedAccessGeneration {
-            onLoadFinished = { [weak self] in
-                guard let self else { return }
-                guard gen == self.sidebarDirLoadGeneration else { return }
-                self.endRetainedSidebarSecurityScope()
+        let decoded = trimmed.removingPercentEncoding ?? trimmed
+        let resolved = decoded.hasPrefix("/")
+            ? URL(fileURLWithPath: decoded)
+            : URL(fileURLWithPath: decoded, relativeTo: directory)
+        let standardized = resolved.standardizedFileURL
+        guard FileManager.default.fileExists(atPath: standardized.path) else { return nil }
+        return standardized
+    }
+
+    /// Surface the real error (permissions / too large) instead of silently swallowing it.
+    nonisolated private static func loadAssetData(at fileURL: URL) -> Result<Data, Error> {
+        do {
+            let data = try Data(contentsOf: fileURL)
+            guard !data.isEmpty else {
+                return .failure(NSError(domain: "MarkdownViewer", code: 1,
+                                        userInfo: [NSLocalizedDescriptionKey: "empty file"]))
             }
-        } else {
-            onLoadFinished = nil
-        }
-
-        fileService.loadFolder(at: parentURL, selecting: fileURL, onLoadFinished: onLoadFinished)
-        return true
-    }
-
-    private func beginRetainedSidebarSecurityScope(for fileURL: URL) {
-        endRetainedSidebarSecurityScope()
-        let url = fileURL.standardized
-        if url.startAccessingSecurityScopedResource() {
-            retainedSidebarSecurityFileURL = url
-        }
-    }
-
-    private func endRetainedSidebarSecurityScope() {
-        if let url = retainedSidebarSecurityFileURL {
-            url.stopAccessingSecurityScopedResource()
-            retainedSidebarSecurityFileURL = nil
-        }
-    }
-
-    private nonisolated static func withSecurityScopedAccess<T>(
-        to url: URL,
-        _ body: () throws -> T
-    ) rethrows -> T {
-        let didAccess = url.startAccessingSecurityScopedResource()
-        defer {
-            if didAccess {
-                url.stopAccessingSecurityScopedResource()
+            guard data.count <= 8_000_000 else {
+                return .failure(NSError(domain: "MarkdownViewer", code: 2,
+                                        userInfo: [NSLocalizedDescriptionKey: "asset exceeds 8 MB limit"]))
             }
+            return .success(data)
+        } catch {
+            return .failure(error)
         }
-        return try body()
     }
 
-    private nonisolated static func resolveSecurityScopedBookmark(forKey key: String) -> URL? {
-        guard let data = UserDefaults.standard.data(forKey: key) else { return nil }
-        var isStale = false
-        return try? URL(
-            resolvingBookmarkData: data,
-            options: [.withSecurityScope],
-            relativeTo: nil,
-            bookmarkDataIsStale: &isStale
-        )
+    nonisolated private static func mimeType(forPreviewAsset pathExtension: String) -> String {
+        switch pathExtension.lowercased() {
+        case "svg": return "image/svg+xml"
+        case "png": return "image/png"
+        case "jpg", "jpeg": return "image/jpeg"
+        case "gif": return "image/gif"
+        case "webp": return "image/webp"
+        default: return "application/octet-stream"
+        }
     }
 
-    private nonisolated static func path(_ path: String, isInsideOrEqualTo rootPath: String) -> Bool {
-        if path == rootPath { return true }
-        let prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
-        return path.hasPrefix(prefix)
+    /// Drains Launch Services queue; returns the last URL when multiple files were queued.
+    private static func lastQueuedOpenURL() -> URL? {
+        var last: URL?
+        while let url = AppDelegate.consumeQueuedOpenURL() {
+            last = url
+        }
+        return last
     }
 
     var lineCount: Int {
@@ -538,5 +564,4 @@ final class DocumentViewModel {
         text.enumerateLines { _, _ in count += 1 }
         return count
     }
-
 }

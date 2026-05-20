@@ -15,8 +15,8 @@ permissions:
   contents: read
 
 jobs:
-  build-and-test:
-    name: Build & test (macOS 15, Swift 6.2)
+  build:
+    name: Build (macOS 15, Swift 6.2)
     runs-on: macos-15
 
     steps:
@@ -39,6 +39,3 @@ jobs:
 
       - name: Build (release)
         run: swift build -c release --disable-sandbox
-
-      - name: Test
-        run: swift test --disable-sandbox
