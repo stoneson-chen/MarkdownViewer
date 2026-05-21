@@ -33,21 +33,36 @@ jobs:
       - name: Package .app (release + ad-hoc codesign)
         run: ./package_app.sh
 
-      - name: Zip app bundle
-        id: zip
+      - name: Prepare Release Artifacts
+        id: artifacts
         run: |
           VERSION="${GITHUB_REF_NAME:-manual}"
           ZIP_NAME="MarkdownViewer-${VERSION}-macos15-${{ runner.arch }}.zip"
+          DMG_NAME="MarkdownViewer-${VERSION}-macos15-${{ runner.arch }}.dmg"
+          
+          # Create ZIP archive
           ditto -c -k --sequesterRsrc --keepParent MarkdownViewer.app "$ZIP_NAME"
+          
+          # Rename generated DMG file or build it as backup
+          if [ -f "MarkdownViewer.dmg" ]; then
+            mv MarkdownViewer.dmg "$DMG_NAME"
+          else
+            hdiutil create -volname "MarkdownViewer" -srcfolder MarkdownViewer.app -ov -format UDZO "$DMG_NAME"
+          fi
+          
           echo "zip_path=$ZIP_NAME" >> "$GITHUB_OUTPUT"
-          shasum -a 256 "$ZIP_NAME" | tee SHA256SUMS.txt
+          echo "dmg_path=$DMG_NAME" >> "$GITHUB_OUTPUT"
+          
+          # Generate SHA256 checksums
+          shasum -a 256 "$ZIP_NAME" "$DMG_NAME" | tee SHA256SUMS.txt
 
       - name: Upload artifact (always)
         uses: actions/upload-artifact@v4
         with:
           name: MarkdownViewer-macos15-${{ runner.arch }}
           path: |
-            ${{ steps.zip.outputs.zip_path }}
+            ${{ steps.artifacts.outputs.zip_path }}
+            ${{ steps.artifacts.outputs.dmg_path }}
             SHA256SUMS.txt
 
       - name: Create GitHub Release (tag pushes only)
@@ -55,7 +70,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            ${{ steps.zip.outputs.zip_path }}
+            ${{ steps.artifacts.outputs.zip_path }}
+            ${{ steps.artifacts.outputs.dmg_path }}
             SHA256SUMS.txt
           generate_release_notes: true
           fail_on_unmatched_files: true
