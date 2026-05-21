@@ -43,12 +43,8 @@ jobs:
           # Create ZIP archive
           ditto -c -k --sequesterRsrc --keepParent MarkdownViewer.app "$ZIP_NAME"
           
-          # Rename generated DMG file or build it as backup
-          if [ -f "MarkdownViewer.dmg" ]; then
-            mv MarkdownViewer.dmg "$DMG_NAME"
-          else
-            hdiutil create -volname "MarkdownViewer" -srcfolder MarkdownViewer.app -ov -format UDZO "$DMG_NAME"
-          fi
+          # Build DMG directly in workflow
+          hdiutil create -volname "MarkdownViewer" -srcfolder MarkdownViewer.app -ov -format UDZO "$DMG_NAME"
           
           echo "zip_path=$ZIP_NAME" >> "$GITHUB_OUTPUT"
           echo "dmg_path=$DMG_NAME" >> "$GITHUB_OUTPUT"

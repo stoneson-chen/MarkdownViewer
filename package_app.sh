@@ -82,12 +82,6 @@ echo "🔍 Verifying code signature..."
 codesign --verify --deep --strict --verbose=2 "${APP_DIR}"
 codesign -d --entitlements :- "${APP_DIR}" >/dev/null
 
-echo "💿 Packaging DMG..."
-DMG_NAME="MarkdownViewer.dmg"
-rm -f "${PROJECT_DIR}/${DMG_NAME}"
-hdiutil create -volname "MarkdownViewer" -srcfolder "${APP_DIR}" -ov -format UDZO "${PROJECT_DIR}/${DMG_NAME}"
-echo "✅ Successfully created DMG: ${PROJECT_DIR}/${DMG_NAME}"
-
 echo "✅ Successfully packaged: ${APP_DIR}"
 echo ""
 echo "To install:"
