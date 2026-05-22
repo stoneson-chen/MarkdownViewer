@@ -811,8 +811,30 @@ struct WebPreview: NSViewRepresentable {
                             WebPreview.jsPreparePDFExport(margin: margin, tocInnerHTML: tocHTML)
                         )
 
-                        let data = try await webView.pdf(configuration: WebPreview.a4PDFConfiguration())
-                        try data.write(to: url)
+                        // 1. 初始化 macOS 物理打印配置，使用独立实例避免影响系统全局设置
+                        let printInfo = NSPrintInfo()
+                        printInfo.paperSize = NSSize(width: 595.28, height: 841.89) // A4 纸张标准尺寸
+                        printInfo.orientation = .portrait
+                        printInfo.horizontalPagination = .fit
+                        printInfo.verticalPagination = .automatic
+                        
+                        // 2. 将系统打印外边距设为 0，使导出的 PDF 完全受 @media print CSS 边距优雅控制
+                        printInfo.leftMargin = 0
+                        printInfo.rightMargin = 0
+                        printInfo.topMargin = 0
+                        printInfo.bottomMargin = 0
+                        
+                        // 3. 将打印任务指定为“直接静默保存文件”，并挂载目标 PDF 的本地保存 URL
+                        printInfo.jobDisposition = .save
+                        printInfo.dictionary()[NSPrintInfo.AttributeKey.jobSavingURL] = url as NSURL
+                        
+                        // 4. 从 WebKit 提取打印操作并关闭所有弹窗及进度面板实现静默导出
+                        let printOperation = webView.printOperation(with: printInfo)
+                        printOperation.showsPrintPanel = false
+                        printOperation.showsProgressPanel = false
+                        
+                        // 5. 在主线程同步执行打印，网页将自动按照 CSS page-break 规则完美进行物理分页输出
+                        printOperation.run()
 
                         _ = try? await webView.evaluateJavaScript(WebPreview.jsCleanupPDFExport())
 

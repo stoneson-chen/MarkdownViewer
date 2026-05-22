@@ -436,7 +436,14 @@ struct ContentView: View {
                             rules += " --line-height-base: \(editorLineHeight);"
                             
                             let cssString = applyCSS ? viewModel.previewCSS : ""
-                            
+                            let tocTitle = String(localized: "outline.title", bundle: .appResources)
+                            let tocHTML = includeTOC
+                                ? WebPreview.buildExportTOCHTML(headings: viewModel.headings, tocTitle: tocTitle)
+                                : ""
+                            let tocSection = tocHTML.isEmpty
+                                ? ""
+                                : "<nav class=\"export-toc\">\(tocHTML)</nav>"
+
                             let exportHTML = """
                             <!DOCTYPE html>
                             <html>
@@ -453,6 +460,22 @@ struct ContentView: View {
                                     padding: 2em;
                                     max-width: 800px;
                                     margin: 0 auto;
+                                }
+                                .export-toc {
+                                    margin-bottom: 2em;
+                                    page-break-after: always;
+                                }
+                                .export-toc ul {
+                                    list-style: none;
+                                    padding-left: 0;
+                                    margin: 0;
+                                }
+                                .export-toc li {
+                                    line-height: 1.6;
+                                }
+                                .export-toc a {
+                                    color: inherit;
+                                    text-decoration: none;
                                 }
                                 /* MSO Word 高保真排版引线与边框样式支持 */
                                 blockquote {
@@ -476,6 +499,7 @@ struct ContentView: View {
                             </head>
                             <body>
                                 <article class="markdown-body">
+                                \(tocSection)
                                 \(viewModel.renderedHTML)
                                 </article>
                             </body>
