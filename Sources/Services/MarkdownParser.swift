@@ -62,18 +62,10 @@ nonisolated final class MarkdownParser: Sendable {
 
     // MARK: - Public API
 
-    /// Progressive parse: first N lines for instant preview.
-    /// Returns a partial result covering only the first `lineLimit` lines.
-    func parseFirstChunk(_ markdown: String, lineLimit: Int = 150) -> ParseResult {
-        let lines = markdown.components(separatedBy: .newlines)
-        let chunk = Array(lines.prefix(lineLimit))
-        return parseLines(chunk, fullText: markdown, isPartial: true)
-    }
-
     /// Full parse of the complete markdown text.
     func parse(_ markdown: String) -> ParseResult {
         let lines = markdown.components(separatedBy: .newlines)
-        return parseLines(lines, fullText: markdown, isPartial: false)
+        return parseLines(lines, fullText: markdown)
     }
 
     // MARK: - Nested List Rendering
@@ -149,7 +141,7 @@ nonisolated final class MarkdownParser: Sendable {
 
     // MARK: - Core Parse Engine
 
-    private func parseLines(_ lines: [String], fullText: String, isPartial: Bool) -> ParseResult {
+    private func parseLines(_ lines: [String], fullText: String) -> ParseResult {
         var htmlParts: [String] = []
         htmlParts.reserveCapacity(lines.count * 2)
 
@@ -200,7 +192,7 @@ nonisolated final class MarkdownParser: Sendable {
                     let textRange = Range(hMatch.range(at: 2), in: trimmed)!
                     let text = String(trimmed[textRange])
                     let anchorID = generateUniqueSlug(text, counts: &slugCounts)
-                    if !isPartial { headings.append(Heading(level: level, text: text, anchorID: anchorID)) }
+                    headings.append(Heading(level: level, text: text, anchorID: anchorID))
                     htmlParts.append("<h\(level) id=\"\(anchorID)\">\(processInline(text))</h\(level)>\n")
                     i += 1; continue
                 }
@@ -304,7 +296,7 @@ nonisolated final class MarkdownParser: Sendable {
 
         return ParseResult(
             html: htmlParts.joined(),
-            characterCount: isPartial ? 0 : fullText.count,
+            characterCount: fullText.count,
             headings: headings
         )
     }

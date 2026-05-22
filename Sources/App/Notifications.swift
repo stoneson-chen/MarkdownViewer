@@ -54,4 +54,11 @@ extension Notification.Name {
     // MARK: - Navigation & Sync
     static let didDetectHeading = Notification.Name("didDetectHeading")
     static let executeScrollJS = Notification.Name("executeScrollJS")
+
+    // MARK: - Search
+    static let didUpdateSearchQuery = Notification.Name("didUpdateSearchQuery")
+    static let didNavigateSearchMatch = Notification.Name("didNavigateSearchMatch")
+    
+    // MARK: - Export
+    static let exportPDFRequest = Notification.Name("exportPDFRequest")
 }

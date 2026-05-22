@@ -17,10 +17,17 @@ struct PreviewView: View {
     let scrollSyncCommand: ScrollSyncCommand?
     let onScroll: ((Double) -> Void)?
     @AppStorage("appTheme") private var appTheme: AppTheme = .system
+    
+    // Typography settings
+    @AppStorage("editorFontSize") private var editorFontSize: Double = 15.0
+    @AppStorage("editorFontFamily") private var editorFontFamily: String = "SF Pro"
+    @AppStorage("editorLineHeight") private var editorLineHeight: Double = 1.6
+    @AppStorage("previewTheme") private var previewTheme: String = "light"
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
             WebPreview(
+                viewModel: viewModel,
                 html: viewModel.renderedHTML,
                 css: viewModel.previewCSS,
                 baseURL: viewModel.resolveRenderingBase(),
@@ -28,7 +35,11 @@ struct PreviewView: View {
                 appTheme: appTheme,
                 commandScope: commandScope,
                 scrollSyncCommand: scrollSyncCommand,
-                onScroll: onScroll
+                onScroll: onScroll,
+                editorFontSize: editorFontSize,
+                editorFontFamily: editorFontFamily,
+                editorLineHeight: editorLineHeight,
+                previewTheme: previewTheme
             )
 
             if viewModel.isRendering {
@@ -50,9 +61,43 @@ struct PreviewView: View {
     }
 }
 
+// MARK: - Preview Themes
+
+struct PreviewThemes {
+    static let darkVars = [
+        "--text-primary": "#f5f5f7", "--text-secondary": "#a1a1a6",
+        "--bg-primary": "#1d1d1f", "--bg-code": "#2c2c2e",
+        "--bg-blockquote": "#2c2c2e", "--border-color": "#424245",
+        "--accent-color": "#2997ff", "--accent-hover": "#64b5f6",
+        "--heading-color": "#f5f5f7", "--code-color": "#ff6b9d", "--link-color": "#2997ff"
+    ]
+    static let lightVars = [
+        "--text-primary": "#1d1d1f", "--text-secondary": "#6e6e73",
+        "--bg-primary": "#ffffff", "--bg-code": "#f5f5f7",
+        "--bg-blockquote": "#f9f9fb", "--border-color": "#d2d2d7",
+        "--accent-color": "#0071e3", "--accent-hover": "#0077ed",
+        "--heading-color": "#1d1d1f", "--code-color": "#d63384", "--link-color": "#0071e3"
+    ]
+    static let sepiaVars = [
+        "--text-primary": "#5b4636", "--text-secondary": "#8f7560",
+        "--bg-primary": "#f4ecd8", "--bg-code": "#ebdcb9",
+        "--bg-blockquote": "#ebdcb9", "--border-color": "#d8c09b",
+        "--accent-color": "#b85a38", "--accent-hover": "#93462b",
+        "--heading-color": "#3d2d1e", "--code-color": "#b85a38", "--link-color": "#b85a38"
+    ]
+    static let oceanVars = [
+        "--text-primary": "#e2f1ff", "--text-secondary": "#8ab7d9",
+        "--bg-primary": "#0a192f", "--bg-code": "#172a45",
+        "--bg-blockquote": "#172a45", "--border-color": "#1f3a60",
+        "--accent-color": "#64ffda", "--accent-hover": "#a7f3d0",
+        "--heading-color": "#e2f1ff", "--code-color": "#ff79c6", "--link-color": "#64ffda"
+    ]
+}
+
 // MARK: - WKWebView Wrapper
 
 struct WebPreview: NSViewRepresentable {
+    let viewModel: DocumentViewModel
     let html: String
     let css: String
     let baseURL: URL?
@@ -61,6 +106,12 @@ struct WebPreview: NSViewRepresentable {
     let commandScope: WindowCommandScope
     let scrollSyncCommand: ScrollSyncCommand?
     let onScroll: ((Double) -> Void)?
+    
+    // Typography properties
+    let editorFontSize: Double
+    let editorFontFamily: String
+    let editorLineHeight: Double
+    let previewTheme: String
 
     /// `mermaid.min.js` loaded once and injected as a `WKUserScript` (saves ~3 MB of string allocation per reload).
     /// Lives on the configuration so it's shared by every navigation in the web view.
@@ -78,6 +129,7 @@ struct WebPreview: NSViewRepresentable {
 #endif
         config.userContentController.add(context.coordinator, name: "headingInView")
         config.userContentController.add(context.coordinator, name: "previewScroll")
+        config.userContentController.add(context.coordinator, name: "searchMatchesCount")
         if let mermaid = Self.mermaidUserScript {
             config.userContentController.addUserScript(mermaid)
         }
@@ -93,13 +145,18 @@ struct WebPreview: NSViewRepresentable {
     func updateNSView(_ webView: WKWebView, context: Context) {
         context.coordinator.webView = webView
         context.coordinator.onScroll = onScroll
-        applyAppearance(to: webView, theme: appTheme)
+        context.coordinator.viewModel = viewModel
+        applyPreviewAppearance(to: webView)
 
         let needsFullReload = context.coordinator.lastCSS != css
                              || context.coordinator.lastDocumentBaseURL != baseURL
                              || context.coordinator.lastScrollSessionKey != scrollSessionKey
                              || context.coordinator.lastAppTheme != appTheme
                              || context.coordinator.lastBody != html
+                             || context.coordinator.lastFontSize != editorFontSize
+                             || context.coordinator.lastFontFamily != editorFontFamily
+                             || context.coordinator.lastLineHeight != editorLineHeight
+                             || context.coordinator.lastPreviewTheme != previewTheme
 
         if needsFullReload && !html.isEmpty {
             context.coordinator.lastCSS = css
@@ -107,6 +164,10 @@ struct WebPreview: NSViewRepresentable {
             context.coordinator.lastScrollSessionKey = scrollSessionKey
             context.coordinator.lastAppTheme = appTheme
             context.coordinator.lastBody = html
+            context.coordinator.lastFontSize = editorFontSize
+            context.coordinator.lastFontFamily = editorFontFamily
+            context.coordinator.lastLineHeight = editorLineHeight
+            context.coordinator.lastPreviewTheme = previewTheme
 
             let fullHTML = wrapInHTMLTemplate(
                 body: html,
@@ -118,7 +179,7 @@ struct WebPreview: NSViewRepresentable {
         }
 
         if context.coordinator.scrollObserver == nil {
-            context.coordinator.setupScrollListener()
+            context.coordinator.setupNotifications()
         }
 
         if let scrollSyncCommand {
@@ -129,10 +190,12 @@ struct WebPreview: NSViewRepresentable {
     static func dismantleNSView(_ nsView: WKWebView, coordinator: Coordinator) {
         nsView.configuration.userContentController.removeScriptMessageHandler(forName: "headingInView")
         nsView.configuration.userContentController.removeScriptMessageHandler(forName: "previewScroll")
+        nsView.configuration.userContentController.removeScriptMessageHandler(forName: "searchMatchesCount")
+        coordinator.cleanup()
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(commandScope: commandScope)
+        Coordinator(commandScope: commandScope, viewModel: viewModel)
     }
 
     // MARK: - HTML Template
@@ -145,10 +208,83 @@ struct WebPreview: NSViewRepresentable {
         return href.replacingOccurrences(of: "\"", with: "&quot;")
     }
 
-    private func jsStringLiteral(_ value: String) -> String {
+    static func jsStringLiteral(_ value: String) -> String {
         value
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "'", with: "\\'")
+    }
+
+    static func htmlEscape(_ text: String) -> String {
+        text
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+    }
+
+    static func buildExportTOCHTML(headings: [MarkdownParser.Heading], tocTitle: String) -> String {
+        guard !headings.isEmpty else { return "" }
+        var html = "<h2>\(htmlEscape(tocTitle))</h2><ul>"
+        for heading in headings {
+            let indent = max(0, heading.level - 1) * 16
+            html += "<li style=\"padding-left:\(indent)px\"><a href=\"#\(heading.anchorID)\">\(htmlEscape(heading.text))</a></li>"
+        }
+        html += "</ul>"
+        return html
+    }
+
+    static func jsPreparePDFExport(margin: Double, tocInnerHTML: String) -> String {
+        let tocLiteral = tocInnerHTML.isEmpty ? "null" : "'\(jsStringLiteral(tocInnerHTML))'"
+        return """
+        (function() {
+            document.getElementById('pdf-export-style')?.remove();
+            document.getElementById('pdf-export-toc')?.remove();
+            document.getElementById('pdf-margin-style')?.remove();
+
+            const style = document.createElement('style');
+            style.id = 'pdf-export-style';
+            style.textContent = '@media print { \
+                @page { size: A4; margin: \(margin)pt; } \
+                html, body { height: auto !important; overflow: visible !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; } \
+                #content, .markdown-body { max-width: none !important; width: auto !important; margin: 0 !important; padding: 0 !important; } \
+                pre, blockquote, table, figure, img, .mermaid { break-inside: avoid-page; page-break-inside: avoid; } \
+                h1, h2, h3, h4, h5, h6 { break-after: avoid-page; page-break-after: avoid; } \
+                .pdf-export-toc { break-after: page; page-break-after: always; margin-bottom: 2em; } \
+                .pdf-export-toc ul { list-style: none; padding-left: 0; margin: 0; } \
+                .pdf-export-toc li { line-height: 1.6; } \
+                .pdf-export-toc a { color: inherit; text-decoration: none; } \
+            }';
+            document.head.appendChild(style);
+
+            const tocHTML = \(tocLiteral);
+            if (tocHTML) {
+                const container = document.getElementById('content');
+                if (container) {
+                    const nav = document.createElement('nav');
+                    nav.id = 'pdf-export-toc';
+                    nav.className = 'pdf-export-toc';
+                    nav.innerHTML = tocHTML;
+                    container.prepend(nav);
+                }
+            }
+        })();
+        """
+    }
+
+    static func jsCleanupPDFExport() -> String {
+        """
+        (function() {
+            document.getElementById('pdf-export-style')?.remove();
+            document.getElementById('pdf-export-toc')?.remove();
+            document.getElementById('pdf-margin-style')?.remove();
+        })();
+        """
+    }
+
+    static func a4PDFConfiguration() -> WKPDFConfiguration {
+        let config = WKPDFConfiguration()
+        config.rect = CGRect(x: 0, y: 0, width: 595.28, height: 841.89)
+        return config
     }
 
     private func wrapInHTMLTemplate(
@@ -175,6 +311,9 @@ struct WebPreview: NSViewRepresentable {
             <style>
             \(css)
             html { scroll-behavior: smooth; }
+            body {
+                padding-top: 72px !important;
+            }
 
             /* Syntax Highlighting */
             .hl-keyword  { color: #d73a49; font-weight: 600; }
@@ -192,6 +331,20 @@ struct WebPreview: NSViewRepresentable {
                 .hl-type     { color: #d2a8ff; }
                 .hl-func     { color: #d2a8ff; }
                 .hl-builtin  { color: #79c0ff; }
+            }
+
+            /* Search Highlights */
+            mark.search-match {
+                background-color: rgba(255, 235, 59, 0.4);
+                color: inherit;
+                border-radius: 2px;
+                padding: 0 1px;
+                transition: background-color 0.2s, outline 0.2s;
+            }
+            mark.search-match.active-match {
+                background-color: #ff9800 !important;
+                color: #000000 !important;
+                outline: 2px solid #e65100;
             }
 
             /* Mermaid */
@@ -234,8 +387,114 @@ struct WebPreview: NSViewRepresentable {
                 return result;
             }
 
+            // Search implementation
+            window.__searchMatches = [];
+            window.__activeSearchIndex = -1;
+
+            function escapeRegExp(string) {
+                return string.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&');
+            }
+
+            function clearSearchHighlights() {
+                const marks = document.querySelectorAll('mark.search-match');
+                marks.forEach(mark => {
+                    const parent = mark.parentNode;
+                    if (parent) {
+                        parent.replaceChild(document.createTextNode(mark.textContent), mark);
+                        parent.normalize();
+                    }
+                });
+                window.__searchMatches = [];
+                window.__activeSearchIndex = -1;
+            }
+
+            function highlightSearchKeyword(keyword) {
+                clearSearchHighlights();
+                if (!keyword || keyword.trim() === '') {
+                    window.webkit.messageHandlers.searchMatchesCount.postMessage(0);
+                    return;
+                }
+                
+                const escaped = escapeRegExp(keyword);
+                const regex = new RegExp(escaped, 'gi');
+                const container = document.getElementById('content');
+                if (!container) return;
+
+                const textNodes = [];
+                const walk = document.createTreeWalker(
+                    container,
+                    NodeFilter.SHOW_TEXT,
+                    {
+                        acceptNode: function(node) {
+                            const parentTag = node.parentNode.tagName.toLowerCase();
+                            if (parentTag === 'script' || parentTag === 'style' || parentTag === 'noscript') {
+                                return NodeFilter.FILTER_REJECT;
+                            }
+                            return NodeFilter.FILTER_ACCEPT;
+                        }
+                    }
+                );
+
+                let currentNode;
+                while (currentNode = walk.nextNode()) {
+                    textNodes.push(currentNode);
+                }
+
+                const matches = [];
+                textNodes.forEach(node => {
+                    const text = node.nodeValue;
+                    if (!regex.test(text)) return;
+                    
+                    regex.lastIndex = 0;
+                    const parent = node.parentNode;
+                    if (!parent) return;
+
+                    const fragments = document.createDocumentFragment();
+                    let lastIndex = 0;
+                    let match;
+
+                    while ((match = regex.exec(text)) !== null) {
+                        if (match.index > lastIndex) {
+                            fragments.appendChild(document.createTextNode(text.substring(lastIndex, match.index)));
+                        }
+                        
+                        const mark = document.createElement('mark');
+                        mark.className = 'search-match';
+                        mark.textContent = match[0];
+                        fragments.appendChild(mark);
+                        matches.push(mark);
+                        
+                        lastIndex = regex.lastIndex;
+                    }
+
+                    if (lastIndex < text.length) {
+                        fragments.appendChild(document.createTextNode(text.substring(lastIndex)));
+                    }
+
+                    parent.replaceChild(fragments, node);
+                });
+
+                window.__searchMatches = matches;
+                window.webkit.messageHandlers.searchMatchesCount.postMessage(matches.length);
+            }
+
+            function selectSearchMatch(index) {
+                if (window.__searchMatches.length === 0) return;
+                
+                if (window.__activeSearchIndex >= 0 && window.__activeSearchIndex < window.__searchMatches.length) {
+                    window.__searchMatches[window.__activeSearchIndex].classList.remove('active-match');
+                }
+                
+                window.__activeSearchIndex = index;
+                if (index >= 0 && index < window.__searchMatches.length) {
+                    const match = window.__searchMatches[index];
+                    match.classList.add('active-match');
+                    match.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+            }
+
             // Preserve scroll position across updates (per document)
-            var scrollKey = 'mdviewer_scroll_\(jsStringLiteral(scrollSessionKey))';
+            var scrollKey = 'mdviewer_scroll_\(Self.jsStringLiteral(scrollSessionKey))';
             var saved = sessionStorage.getItem(scrollKey);
             if (saved) window.scrollTo(0, parseInt(saved));
             var lastReportedPreviewPct = -1;
@@ -385,48 +644,65 @@ struct WebPreview: NSViewRepresentable {
         """
     }
 
-    private func applyAppearance(to webView: WKWebView, theme: AppTheme) {
-        switch theme {
-        case .dark:
+    private func applyPreviewAppearance(to webView: WKWebView) {
+        if previewTheme == "dark" || previewTheme == "ocean" {
             webView.appearance = NSAppearance(named: .darkAqua)
-        case .light:
+        } else {
             webView.appearance = NSAppearance(named: .aqua)
-        case .system:
-            webView.appearance = nil
         }
     }
 
     /// Inject explicit CSS variable overrides when user selects a specific theme.
     private func themeOverrideStyle() -> String {
         let vars: [String: String]
-        switch appTheme {
-        case .dark: vars = [
-            "--text-primary": "#f5f5f7", "--text-secondary": "#a1a1a6",
-            "--bg-primary": "#1d1d1f", "--bg-code": "#2c2c2e",
-            "--bg-blockquote": "#2c2c2e", "--border-color": "#424245",
-            "--accent-color": "#2997ff", "--accent-hover": "#64b5f6",
-            "--heading-color": "#f5f5f7", "--code-color": "#ff6b9d", "--link-color": "#2997ff"]
-        case .light: vars = [
-            "--text-primary": "#1d1d1f", "--text-secondary": "#6e6e73",
-            "--bg-primary": "#ffffff", "--bg-code": "#f5f5f7",
-            "--bg-blockquote": "#f9f9fb", "--border-color": "#d2d2d7",
-            "--accent-color": "#0071e3", "--accent-hover": "#0077ed",
-            "--heading-color": "#1d1d1f", "--code-color": "#d63384", "--link-color": "#0071e3"]
-        case .system: return ""
+        switch previewTheme {
+        case "dark": vars = PreviewThemes.darkVars
+        case "sepia": vars = PreviewThemes.sepiaVars
+        case "ocean": vars = PreviewThemes.oceanVars
+        default: vars = PreviewThemes.lightVars
         }
-        let rules = vars.map { "\($0.key): \($0.value);" }.joined(separator: " ")
-        return "<style>:root { \(rules) }</style>"
+        
+        let fontFamilyCSS = switch editorFontFamily {
+        case "SF Mono": "ui-monospace, monospace"
+        case "New York": "Georgia, serif"
+        default: "system-ui, -apple-system, sans-serif"
+        }
+        
+        var rules = vars.map { "\($0.key): \($0.value);" }.joined(separator: " ")
+        rules += " --font-family-base: \(fontFamilyCSS);"
+        rules += " --font-size-base: \(editorFontSize)px;"
+        rules += " --line-height-base: \(editorLineHeight);"
+        
+        return """
+        <style>
+        :root { \(rules) }
+        body {
+            font-family: var(--font-family-base) !important;
+            font-size: var(--font-size-base) !important;
+            line-height: var(--line-height-base) !important;
+            color: var(--text-primary) !important;
+            background-color: var(--bg-primary) !important;
+        }
+        </style>
+        """
     }
 
     // MARK: - Coordinator
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler, @unchecked Sendable {
         private let commandScope: WindowCommandScope
+        weak var viewModel: DocumentViewModel?
         var lastBody: String = ""
         var lastCSS: String = ""
         var lastDocumentBaseURL: URL?
         var lastScrollSessionKey: String?
         var lastAppTheme: AppTheme?
+        
+        // Cache for typography
+        var lastFontSize: Double = -1
+        var lastFontFamily: String = ""
+        var lastLineHeight: Double = -1
+        var lastPreviewTheme: String = ""
 
         weak var webView: WKWebView?
         var onScroll: ((Double) -> Void)?
@@ -445,9 +721,13 @@ struct WebPreview: NSViewRepresentable {
             webView.loadHTMLString(html, baseURL: baseURL)
         }
         nonisolated(unsafe) var scrollObserver: (any NSObjectProtocol)?
+        nonisolated(unsafe) var searchUpdateObserver: (any NSObjectProtocol)?
+        nonisolated(unsafe) var searchNavigateObserver: (any NSObjectProtocol)?
+        nonisolated(unsafe) var exportObserver: (any NSObjectProtocol)?
 
-        init(commandScope: WindowCommandScope) {
+        init(commandScope: WindowCommandScope, viewModel: DocumentViewModel) {
             self.commandScope = commandScope
+            self.viewModel = viewModel
         }
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -462,9 +742,16 @@ struct WebPreview: NSViewRepresentable {
                 guard !isApplyingRemoteScroll else { return }
                 onScroll?(percent)
             }
+            if message.name == "searchMatchesCount", let count = message.body as? Int {
+                Task { @MainActor in
+                    viewModel?.updateSearchMatchesCount(count)
+                }
+            }
         }
 
-        func setupScrollListener() {
+        func setupNotifications() {
+            guard scrollObserver == nil else { return }
+            
             scrollObserver = NotificationCenter.default.addObserver(
                 forName: .executeScrollJS,
                 object: commandScope,
@@ -473,6 +760,74 @@ struct WebPreview: NSViewRepresentable {
                 if let anchorID = notification.userInfo?["anchorID"] as? String {
                     Task { @MainActor in
                         _ = try? await self?.webView?.evaluateJavaScript("scrollToAnchor('\(anchorID)')")
+                    }
+                }
+            }
+
+            searchUpdateObserver = NotificationCenter.default.addObserver(
+                forName: .didUpdateSearchQuery,
+                object: viewModel,
+                queue: .main
+            ) { [weak self] notification in
+                let query = notification.userInfo?["query"] as? String ?? ""
+                Task { @MainActor in
+                    guard let self = self, let webView = self.webView else { return }
+                    let jsEscapedQuery = WebPreview.jsStringLiteral(query)
+                    _ = try? await webView.evaluateJavaScript("highlightSearchKeyword('\(jsEscapedQuery)')")
+                }
+            }
+
+            searchNavigateObserver = NotificationCenter.default.addObserver(
+                forName: .didNavigateSearchMatch,
+                object: viewModel,
+                queue: .main
+            ) { [weak self] notification in
+                let index = notification.userInfo?["index"] as? Int ?? 0
+                Task { @MainActor in
+                    guard let self = self, let webView = self.webView else { return }
+                    _ = try? await webView.evaluateJavaScript("selectSearchMatch(\(index))")
+                }
+            }
+
+            exportObserver = NotificationCenter.default.addObserver(
+                forName: .exportPDFRequest,
+                object: commandScope,
+                queue: .main
+            ) { [weak self] notification in
+                guard let userInfo = notification.userInfo,
+                      let url = userInfo["url"] as? URL,
+                      let margin = userInfo["margin"] as? Double else { return }
+                let includeTOC = userInfo["includeTOC"] as? Bool ?? false
+
+                Task { @MainActor in
+                    guard let self = self, let webView = self.webView else { return }
+                    do {
+                        let tocTitle = String(localized: "outline.title", bundle: .appResources)
+                        let tocHTML = includeTOC
+                            ? WebPreview.buildExportTOCHTML(headings: self.viewModel?.headings ?? [], tocTitle: tocTitle)
+                            : ""
+
+                        _ = try await webView.evaluateJavaScript(
+                            WebPreview.jsPreparePDFExport(margin: margin, tocInnerHTML: tocHTML)
+                        )
+
+                        let data = try await webView.pdf(configuration: WebPreview.a4PDFConfiguration())
+                        try data.write(to: url)
+
+                        _ = try? await webView.evaluateJavaScript(WebPreview.jsCleanupPDFExport())
+
+                        NotificationCenter.default.post(
+                            name: Notification.Name("exportDidFinish"),
+                            object: self.commandScope,
+                            userInfo: ["success": true, "url": url]
+                        )
+                    } catch {
+                        _ = try? await webView.evaluateJavaScript(WebPreview.jsCleanupPDFExport())
+                        NotificationCenter.default.post(
+                            name: Notification.Name("exportDidFinish"),
+                            object: self.commandScope,
+                            userInfo: ["success": false, "error": error.localizedDescription]
+                        )
                     }
                 }
             }
@@ -493,10 +848,40 @@ struct WebPreview: NSViewRepresentable {
             applyLiveEditorScroll(command.percent, in: webView)
         }
 
+        @MainActor func cleanup() {
+            remoteScrollResetTask?.cancel()
+            scrollApplyTask?.cancel()
+            if let observer = scrollObserver {
+                NotificationCenter.default.removeObserver(observer)
+                scrollObserver = nil
+            }
+            if let observer = searchUpdateObserver {
+                NotificationCenter.default.removeObserver(observer)
+                searchUpdateObserver = nil
+            }
+            if let observer = searchNavigateObserver {
+                NotificationCenter.default.removeObserver(observer)
+                searchNavigateObserver = nil
+            }
+            if let observer = exportObserver {
+                NotificationCenter.default.removeObserver(observer)
+                exportObserver = nil
+            }
+        }
+
         deinit {
             remoteScrollResetTask?.cancel()
             scrollApplyTask?.cancel()
             if let observer = scrollObserver {
+                NotificationCenter.default.removeObserver(observer)
+            }
+            if let observer = searchUpdateObserver {
+                NotificationCenter.default.removeObserver(observer)
+            }
+            if let observer = searchNavigateObserver {
+                NotificationCenter.default.removeObserver(observer)
+            }
+            if let observer = exportObserver {
                 NotificationCenter.default.removeObserver(observer)
             }
         }

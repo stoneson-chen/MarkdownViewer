@@ -15,6 +15,12 @@ struct OutlineView: View {
     let activeHeadingID: String?
     let onSelect: (MarkdownParser.Heading) -> Void
 
+    @State private var collapsedIDs: Set<String> = []
+
+    private var tree: [OutlineNode] {
+        OutlineTreeBuilder.build(from: headings)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
@@ -22,10 +28,24 @@ struct OutlineView: View {
             if headings.isEmpty {
                 emptyState
             } else {
-                outlineList
+                List {
+                    ForEach(tree) { node in
+                        OutlineNodeView(
+                            node: node,
+                            parentLevel: 0,
+                            activeHeadingID: activeHeadingID,
+                            collapsedIDs: $collapsedIDs,
+                            onSelect: onSelect
+                        )
+                    }
+                }
+                .listStyle(.sidebar)
             }
         }
         .frame(minWidth: 200, idealWidth: 250, maxWidth: 350)
+        .onChange(of: headings.map(\.id)) { _, _ in
+            collapsedIDs.removeAll()
+        }
     }
 
     private var header: some View {
@@ -37,27 +57,6 @@ struct OutlineView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-    }
-
-    private var outlineList: some View {
-        List(headings) { heading in
-            let isActive = heading.anchorID == activeHeadingID
-            
-            HStack(spacing: 8) {
-                headingIcon(for: heading.level)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 14)
-                
-                Text(heading.text)
-                    .font(.system(size: 13, weight: isActive ? .medium : .regular))
-                    .foregroundStyle(isActive ? Color.accentColor : .primary)
-            }
-            .contentShape(Rectangle())
-            .onTapGesture {
-                onSelect(heading)
-            }
-        }
-        .listStyle(.sidebar)
     }
 
     private var emptyState: some View {
@@ -78,14 +77,118 @@ struct OutlineView: View {
         }
         .frame(maxWidth: .infinity)
     }
+}
 
-    @ViewBuilder
-    private func headingIcon(for level: Int) -> some View {
-        switch level {
-        case 1: Image(systemName: "h.square.fill")
-        case 2: Image(systemName: "h.square")
-        case 3: Image(systemName: "number")
-        default: Image(systemName: "circle.fill").font(.system(size: 4))
+// MARK: - Outline Tree
+
+private struct OutlineNode: Identifiable {
+    let heading: MarkdownParser.Heading
+    let children: [OutlineNode]
+
+    var id: String { heading.id }
+}
+
+private enum OutlineTreeBuilder {
+    static func build(from headings: [MarkdownParser.Heading]) -> [OutlineNode] {
+        guard !headings.isEmpty else { return [] }
+
+        var index = 0
+
+        func collectChildren(parentLevel: Int) -> [OutlineNode] {
+            var nodes: [OutlineNode] = []
+            while index < headings.count {
+                let heading = headings[index]
+                if heading.level <= parentLevel { break }
+                index += 1
+                let children = collectChildren(parentLevel: heading.level)
+                nodes.append(OutlineNode(heading: heading, children: children))
+            }
+            return nodes
         }
+
+        var roots: [OutlineNode] = []
+        while index < headings.count {
+            let heading = headings[index]
+            index += 1
+            let children = collectChildren(parentLevel: heading.level)
+            roots.append(OutlineNode(heading: heading, children: children))
+        }
+        return roots
+    }
+}
+
+private struct OutlineNodeView: View {
+    let node: OutlineNode
+    let parentLevel: Int
+    let activeHeadingID: String?
+    @Binding var collapsedIDs: Set<String>
+    let onSelect: (MarkdownParser.Heading) -> Void
+
+    var body: some View {
+        if node.children.isEmpty {
+            OutlineHeadingRow(
+                heading: node.heading,
+                parentLevel: parentLevel,
+                activeHeadingID: activeHeadingID,
+                onSelect: onSelect
+            )
+        } else {
+            DisclosureGroup(isExpanded: isExpanded) {
+                ForEach(node.children) { child in
+                    OutlineNodeView(
+                        node: child,
+                        parentLevel: node.heading.level,
+                        activeHeadingID: activeHeadingID,
+                        collapsedIDs: $collapsedIDs,
+                        onSelect: onSelect
+                    )
+                }
+            } label: {
+                OutlineHeadingRow(
+                    heading: node.heading,
+                    parentLevel: parentLevel,
+                    activeHeadingID: activeHeadingID,
+                    onSelect: onSelect
+                )
+            }
+        }
+    }
+
+    private var isExpanded: Binding<Bool> {
+        Binding(
+            get: { !collapsedIDs.contains(node.id) },
+            set: { expanded in
+                if expanded {
+                    collapsedIDs.remove(node.id)
+                } else {
+                    collapsedIDs.insert(node.id)
+                }
+            }
+        )
+    }
+}
+
+private struct OutlineHeadingRow: View {
+    let heading: MarkdownParser.Heading
+    let parentLevel: Int
+    let activeHeadingID: String?
+    let onSelect: (MarkdownParser.Heading) -> Void
+
+    var body: some View {
+        let isActive = heading.anchorID == activeHeadingID
+
+        Text(heading.text)
+            .font(.system(size: 13, weight: isActive ? .semibold : .regular))
+            .foregroundStyle(isActive ? Color.accentColor : .primary)
+            .padding(.leading, leadingInset)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                onSelect(heading)
+            }
+    }
+
+    private var leadingInset: CGFloat {
+        CGFloat(max(0, heading.level - parentLevel - 1)) * 16
     }
 }

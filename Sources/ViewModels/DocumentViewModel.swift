@@ -9,6 +9,7 @@
 
 import Foundation
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Core ViewModel managing file state, editing mode, and preview rendering.
 @Observable
@@ -28,6 +29,65 @@ final class DocumentViewModel {
 
     /// 当前正在阅读的标题 ID（用于侧边栏高亮）
     var activeHeadingID: String?
+
+    // MARK: - Search State
+
+    /// Whether the search overlay is presented
+    var isSearchPresented: Bool = false {
+        didSet {
+            if !isSearchPresented {
+                searchQuery = ""
+            }
+        }
+    }
+
+    /// Current active search term
+    var searchQuery: String = "" {
+        didSet {
+            currentSearchMatchIndex = 0
+            NotificationCenter.default.post(
+                name: .didUpdateSearchQuery,
+                object: self,
+                userInfo: ["query": searchQuery]
+            )
+        }
+    }
+
+    /// 0-based index of the currently highlighted match
+    var currentSearchMatchIndex: Int = 0
+
+    /// Total count of keyword matches found
+    var totalSearchMatchesCount: Int = 0
+
+    /// Jump to the next match
+    func searchNext() {
+        guard totalSearchMatchesCount > 0 else { return }
+        currentSearchMatchIndex = (currentSearchMatchIndex + 1) % totalSearchMatchesCount
+        NotificationCenter.default.post(
+            name: .didNavigateSearchMatch,
+            object: self,
+            userInfo: ["index": currentSearchMatchIndex]
+        )
+    }
+
+    /// Jump to the previous match
+    func searchPrev() {
+        guard totalSearchMatchesCount > 0 else { return }
+        currentSearchMatchIndex = (currentSearchMatchIndex - 1 + totalSearchMatchesCount) % totalSearchMatchesCount
+        NotificationCenter.default.post(
+            name: .didNavigateSearchMatch,
+            object: self,
+            userInfo: ["index": currentSearchMatchIndex]
+        )
+    }
+
+    /// Invoked when the web page reports the match count
+    func updateSearchMatchesCount(_ count: Int) {
+        totalSearchMatchesCount = count
+        if totalSearchMatchesCount > 0 && currentSearchMatchIndex >= totalSearchMatchesCount {
+            currentSearchMatchIndex = totalSearchMatchesCount - 1
+        }
+    }
 
     // MARK: - File State
 
@@ -66,6 +126,11 @@ final class DocumentViewModel {
 
     /// Window title
     private(set) var windowTitle: String = "README.md"
+
+    /// Title shown in the window chrome; appends * when there are unsaved changes.
+    var displayedWindowTitle: String {
+        isDirty ? "\(windowTitle)*" : windowTitle
+    }
 
     var canReuseForExternalOpen: Bool {
         fileURL == nil && !isDirty
@@ -486,8 +551,37 @@ final class DocumentViewModel {
             return dataURL
         case .failure(let error):
             NSLog("[MarkdownViewer] failed to inline image '%@': %@", fileURL.path, error.localizedDescription)
-            return nil
+            let message: String
+            if error.localizedDescription.localizedCaseInsensitiveContains("exceeds") || error.localizedDescription.localizedCaseInsensitiveContains("8 MB") {
+                message = "Asset Exceeds 8MB Limit"
+            } else {
+                message = "Asset Load Failed"
+            }
+            let escapedFilename = xmlEscape(fileURL.lastPathComponent)
+            let escapedMessage = xmlEscape(message)
+            return generateFallbackSVG(filename: escapedFilename, message: escapedMessage)
         }
+    }
+
+    nonisolated private static func xmlEscape(_ string: String) -> String {
+        var escaped = string
+        escaped = escaped.replacingOccurrences(of: "&", with: "&amp;")
+        escaped = escaped.replacingOccurrences(of: "<", with: "&lt;")
+        escaped = escaped.replacingOccurrences(of: ">", with: "&gt;")
+        escaped = escaped.replacingOccurrences(of: "\"", with: "&quot;")
+        escaped = escaped.replacingOccurrences(of: "'", with: "&apos;")
+        return escaped
+    }
+
+    nonisolated private static func generateFallbackSVG(filename: String, message: String) -> String {
+        let svg = """
+        <svg xmlns="http://www.w3.org/2000/svg" width="350" height="90" viewBox="0 0 350 90">
+          <rect width="100%" height="100%" fill="#fff3cd" stroke="#ffeeba" stroke-width="2" rx="6"/>
+          <text x="50%" y="38%" dominant-baseline="middle" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="13" fill="#856404" font-weight="bold">⚠️ \(message)</text>
+          <text x="50%" y="68%" dominant-baseline="middle" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="11" fill="#856404">\(filename)</text>
+        </svg>
+        """
+        return "data:image/svg+xml;base64,\(Data(svg.utf8).base64EncodedString())"
     }
 
     nonisolated private static func pruneAssetCacheIfNeeded() {
@@ -564,4 +658,8 @@ final class DocumentViewModel {
         text.enumerateLines { _, _ in count += 1 }
         return count
     }
+}
+
+extension UTType {
+    static let markdown = UTType(importedAs: "net.daringfireball.markdown")
 }

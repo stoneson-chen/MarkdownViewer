@@ -22,6 +22,7 @@ private enum EditorFormatActions {
 
 /// The Markdown source editor pane, wrapping NSTextView for performance.
 struct EditorView: View {
+    let viewModel: DocumentViewModel
     @Binding var text: String
     let commandScope: WindowCommandScope
     let scrollSyncCommand: ScrollSyncCommand?
@@ -29,6 +30,7 @@ struct EditorView: View {
 
     var body: some View {
         MarkdownTextEditor(
+            viewModel: viewModel,
             text: $text,
             commandScope: commandScope,
             scrollSyncCommand: scrollSyncCommand,
@@ -41,11 +43,13 @@ struct EditorView: View {
 // MARK: - NSTextView Wrapper (better perf than SwiftUI TextEditor for large docs)
 
 struct MarkdownTextEditor: NSViewRepresentable {
+    let viewModel: DocumentViewModel
     @Binding var text: String
     let commandScope: WindowCommandScope
     let scrollSyncCommand: ScrollSyncCommand?
     let onScroll: (Double) -> Void
-    @AppStorage("editorFontSize") private var fontSize: Double = 14
+    @AppStorage("editorFontSize") private var fontSize: Double = 15.0
+    @AppStorage("editorFontFamily") private var fontFamily: String = "SF Pro"
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -57,8 +61,18 @@ struct MarkdownTextEditor: NSViewRepresentable {
             return scrollView
         }
 
+        // Editor font mapping
+        let editorFont: NSFont
+        if fontFamily == "SF Mono" {
+            editorFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+        } else if fontFamily == "New York" {
+            editorFont = NSFont(name: "New York", size: fontSize) ?? NSFont.systemFont(ofSize: fontSize, weight: .regular)
+        } else {
+            editorFont = NSFont.systemFont(ofSize: fontSize, weight: .regular)
+        }
+
         // Editor appearance
-        textView.font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+        textView.font = editorFont
         textView.textColor = NSColor.labelColor
         textView.backgroundColor = NSColor.textBackgroundColor
         textView.insertionPointColor = NSColor.controlAccentColor
@@ -71,7 +85,7 @@ struct MarkdownTextEditor: NSViewRepresentable {
         textView.isIncrementalSearchingEnabled = true
 
         // Layout
-        textView.textContainerInset = NSSize(width: 20, height: 16)
+        textView.textContainerInset = NSSize(width: 20, height: 72)
         textView.isHorizontallyResizable = false
         textView.isVerticallyResizable = true
         textView.autoresizingMask = [.width]
@@ -103,6 +117,20 @@ struct MarkdownTextEditor: NSViewRepresentable {
         guard let textView = scrollView.documentView as? NSTextView else { return }
         context.coordinator.parent = self
 
+        // Dynamically reload editor font & size if they changed
+        let editorFont: NSFont
+        if fontFamily == "SF Mono" {
+            editorFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+        } else if fontFamily == "New York" {
+            editorFont = NSFont(name: "New York", size: fontSize) ?? NSFont.systemFont(ofSize: fontSize, weight: .regular)
+        } else {
+            editorFont = NSFont.systemFont(ofSize: fontSize, weight: .regular)
+        }
+        
+        if textView.font != editorFont {
+            textView.font = editorFont
+        }
+
         // Only update if text actually changed externally (avoid feedback loop)
         if textView.string != text {
             let selectedRanges = textView.selectedRanges
@@ -113,6 +141,10 @@ struct MarkdownTextEditor: NSViewRepresentable {
         if let scrollSyncCommand {
             context.coordinator.applyScrollCommandIfNeeded(scrollSyncCommand)
         }
+    }
+
+    static func dismantleNSView(_ nsView: NSScrollView, coordinator: Coordinator) {
+        coordinator.cleanup()
     }
 
     private func clampedRanges(_ ranges: [NSValue], maxLength: Int) -> [NSValue] {
@@ -141,11 +173,119 @@ struct MarkdownTextEditor: NSViewRepresentable {
             self.parent = parent
             super.init()
             registerFormatNotifications()
+            registerSearchNotifications()
+        }
+
+        @MainActor func cleanup() {
+            remoteScrollResetTask?.cancel()
+            notificationObservers.forEach { NotificationCenter.default.removeObserver($0) }
+            notificationObservers.removeAll()
         }
 
         deinit {
             remoteScrollResetTask?.cancel()
-            notificationObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        }
+
+        private func registerSearchNotifications() {
+            let center = NotificationCenter.default
+            let viewModel = parent.viewModel
+            
+            notificationObservers.append(
+                center.addObserver(forName: .didUpdateSearchQuery, object: viewModel, queue: .main) { [weak self] notification in
+                    let query = notification.userInfo?["query"] as? String ?? ""
+                    Task { @MainActor in
+                        guard let self = self, self.textView != nil else { return }
+                        self.highlightSearchQuery(query)
+                    }
+                }
+            )
+            
+            notificationObservers.append(
+                center.addObserver(forName: .didNavigateSearchMatch, object: viewModel, queue: .main) { [weak self] notification in
+                    let index = notification.userInfo?["index"] as? Int ?? 0
+                    Task { @MainActor in
+                        guard let self = self, self.textView != nil else { return }
+                        self.navigateToSearchMatch(at: index)
+                    }
+                }
+            )
+        }
+
+        private func highlightSearchQuery(_ query: String) {
+            guard let textView = textView, let layoutManager = textView.layoutManager else { return }
+            
+            let fullRange = NSRange(location: 0, length: (textView.string as NSString).length)
+            layoutManager.removeTemporaryAttribute(.backgroundColor, forCharacterRange: fullRange)
+            layoutManager.removeTemporaryAttribute(.underlineStyle, forCharacterRange: fullRange)
+            
+            guard !query.isEmpty else { return }
+            
+            let nsString = textView.string as NSString
+            var searchRange = NSRange(location: 0, length: nsString.length)
+            
+            while searchRange.location < nsString.length {
+                let foundRange = nsString.range(of: query, options: .caseInsensitive, range: searchRange)
+                guard foundRange.location != NSNotFound else { break }
+                
+                layoutManager.addTemporaryAttribute(
+                    .backgroundColor,
+                    value: NSColor.systemYellow.withAlphaComponent(0.35),
+                    forCharacterRange: foundRange
+                )
+                
+                searchRange.location = NSMaxRange(foundRange)
+                searchRange.length = nsString.length - searchRange.location
+            }
+        }
+
+        private func navigateToSearchMatch(at index: Int) {
+            guard let textView = textView, let layoutManager = textView.layoutManager,
+                  !parent.viewModel.searchQuery.isEmpty else { return }
+            
+            let query = parent.viewModel.searchQuery
+            let nsString = textView.string as NSString
+            let fullRange = NSRange(location: 0, length: nsString.length)
+            layoutManager.removeTemporaryAttribute(.backgroundColor, forCharacterRange: fullRange)
+            layoutManager.removeTemporaryAttribute(.underlineStyle, forCharacterRange: fullRange)
+            
+            var searchRange = NSRange(location: 0, length: nsString.length)
+            var matchRanges: [NSRange] = []
+            
+            while searchRange.location < nsString.length {
+                let foundRange = nsString.range(of: query, options: .caseInsensitive, range: searchRange)
+                guard foundRange.location != NSNotFound else { break }
+                
+                matchRanges.append(foundRange)
+                searchRange.location = NSMaxRange(foundRange)
+                searchRange.length = nsString.length - searchRange.location
+            }
+            
+            for (idx, r) in matchRanges.enumerated() {
+                if idx == index {
+                    layoutManager.addTemporaryAttribute(
+                        .backgroundColor,
+                        value: NSColor.systemOrange,
+                        forCharacterRange: r
+                    )
+                    layoutManager.addTemporaryAttribute(
+                        .underlineStyle,
+                        value: NSUnderlineStyle.single.rawValue,
+                        forCharacterRange: r
+                    )
+                } else {
+                    layoutManager.addTemporaryAttribute(
+                        .backgroundColor,
+                        value: NSColor.systemYellow.withAlphaComponent(0.35),
+                        forCharacterRange: r
+                    )
+                }
+            }
+            
+            if index < matchRanges.count {
+                let targetRange = matchRanges[index]
+                textView.setSelectedRange(targetRange)
+                textView.scrollRangeToVisible(targetRange)
+            }
         }
 
         func setupScrollSync() {
