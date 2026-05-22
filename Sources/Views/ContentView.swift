@@ -541,22 +541,33 @@ struct ContentView: View {
     private func handleExportDidFinish(_ notification: Notification) {
         guard let userInfo = notification.userInfo else { return }
         let success = userInfo["success"] as? Bool ?? false
-        if success {
+        
+        // 核心安全机制：使用 DispatchQueue.main.async 将弹窗移至下一个 RunLoop 周期，
+        // 彻底确保 NSSavePanel 的 sheet 已经彻底注销并淡出，完美杜绝模态嵌套死锁导致 AppHang 崩溃！
+        DispatchQueue.main.async {
             let alert = NSAlert()
-            alert.messageText = String(localized: "export.success", bundle: .appResources)
-            if let url = userInfo["url"] as? URL {
-                alert.informativeText = url.lastPathComponent
+            if success {
+                alert.messageText = String(localized: "export.success", bundle: .appResources)
+                if let url = userInfo["url"] as? URL {
+                    alert.informativeText = url.lastPathComponent
+                }
+                alert.alertStyle = .informational
+            } else if let errorMsg = userInfo["error"] as? String {
+                alert.messageText = String(localized: "export.failed", bundle: .appResources)
+                alert.informativeText = errorMsg
+                alert.alertStyle = .critical
+            } else {
+                return // 用户取消
             }
-            alert.alertStyle = .informational
+            
             alert.addButton(withTitle: String(localized: "common.ok", bundle: .appResources))
-            alert.runModal()
-        } else if let errorMsg = userInfo["error"] as? String {
-            let alert = NSAlert()
-            alert.messageText = String(localized: "export.failed", bundle: .appResources)
-            alert.informativeText = errorMsg
-            alert.alertStyle = .critical
-            alert.addButton(withTitle: String(localized: "common.ok", bundle: .appResources))
-            alert.runModal()
+            
+            // 优先采用非阻塞的 sheet 模态，视觉更现代、契合 HIG，且永不死锁；无可用 Window 时安全回退 runModal
+            if let window = NSApp.keyWindow ?? NSApp.windows.first {
+                alert.beginSheetModal(for: window, completionHandler: nil)
+            } else {
+                alert.runModal()
+            }
         }
     }
 }
