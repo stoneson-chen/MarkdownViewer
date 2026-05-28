@@ -159,14 +159,13 @@ struct ExportPopoverView: View {
     let commandScope: WindowCommandScope
     @State private var format: String = "pdf"
     @State private var margin: Double = 36.0
-    @State private var includeTOC: Bool = false
-    @State private var syntaxHighlight: Bool = true
-    @State private var embedImages: Bool = true
+    @State private var includeTOC: Bool = true
     @State private var applyCSS: Bool = true
-    
+
     @State private var isExporting: Bool = false
-    
-    let onGenerate: (String, Double, Bool, Bool, Bool, Bool) -> Void
+
+    /// 导出内容来自当前预览 HTML（已含语法高亮与内联图片）。
+    let onGenerate: (String, Double, Bool, Bool) -> Void
     
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -207,8 +206,6 @@ struct ExportPopoverView: View {
             // Toggle Switches
             VStack(alignment: .leading, spacing: 8) {
                 Toggle(String(localized: "export.includeTOC", bundle: .appResources), isOn: $includeTOC)
-                Toggle(String(localized: "export.syntaxHighlight", bundle: .appResources), isOn: $syntaxHighlight)
-                Toggle(String(localized: "export.embedImages", bundle: .appResources), isOn: $embedImages)
                 Toggle(String(localized: "export.applyCSS", bundle: .appResources), isOn: $applyCSS)
             }
             .toggleStyle(.checkbox)
@@ -220,7 +217,7 @@ struct ExportPopoverView: View {
             // Action Button
             Button {
                 isExporting = true
-                onGenerate(format, margin, includeTOC, syntaxHighlight, embedImages, applyCSS)
+                onGenerate(format, margin, includeTOC, applyCSS)
             } label: {
                 HStack {
                     Spacer()
@@ -245,7 +242,7 @@ struct ExportPopoverView: View {
         }
         .padding(16)
         .frame(width: 280)
-        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("exportDidFinish"))) { notification in
+        .onReceive(NotificationCenter.default.publisher(for: .exportDidFinish)) { notification in
             guard notification.object as? WindowCommandScope === commandScope else { return }
             isExporting = false
         }

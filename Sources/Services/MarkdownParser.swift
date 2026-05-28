@@ -21,6 +21,7 @@ nonisolated final class MarkdownParser: Sendable {
 
     struct Heading: Identifiable, Sendable {
         let level: Int
+        let markdownText: String
         let text: String
         let anchorID: String
         /// Stable identity for SwiftUI lists; matches the in-document anchor.
@@ -190,10 +191,11 @@ nonisolated final class MarkdownParser: Sendable {
                     let levelRange = Range(hMatch.range(at: 1), in: trimmed)!
                     let level = trimmed[levelRange].count
                     let textRange = Range(hMatch.range(at: 2), in: trimmed)!
-                    let text = String(trimmed[textRange])
+                    let markdownText = String(trimmed[textRange])
+                    let text = plainTextForHeading(markdownText)
                     let anchorID = generateUniqueSlug(text, counts: &slugCounts)
-                    headings.append(Heading(level: level, text: text, anchorID: anchorID))
-                    htmlParts.append("<h\(level) id=\"\(anchorID)\">\(processInline(text))</h\(level)>\n")
+                    headings.append(Heading(level: level, markdownText: markdownText, text: text, anchorID: anchorID))
+                    htmlParts.append("<h\(level) id=\"\(anchorID)\">\(processInline(markdownText))</h\(level)>\n")
                     i += 1; continue
                 }
                 // Not a heading — fall through to paragraph
@@ -500,6 +502,41 @@ nonisolated final class MarkdownParser: Sendable {
         } else {
             return "\(slug)-\(count)"
         }
+    }
+
+    private func plainTextForHeading(_ markdown: String) -> String {
+        let html = processInline(markdown)
+        return decodeHTMLEntities(stripHTMLTags(html))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func stripHTMLTags(_ html: String) -> String {
+        var result = ""
+        var isInsideTag = false
+
+        for character in html {
+            switch character {
+            case "<":
+                isInsideTag = true
+            case ">":
+                isInsideTag = false
+            default:
+                if !isInsideTag {
+                    result.append(character)
+                }
+            }
+        }
+
+        return result
+    }
+
+    private func decodeHTMLEntities(_ text: String) -> String {
+        text
+            .replacingOccurrences(of: "&lt;", with: "<")
+            .replacingOccurrences(of: "&gt;", with: ">")
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&#39;", with: "'")
+            .replacingOccurrences(of: "&amp;", with: "&")
     }
 
     // MARK: - Blockquote Rendering

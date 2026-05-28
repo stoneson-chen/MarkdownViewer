@@ -13,12 +13,17 @@ import SwiftUI
 struct OutlineView: View {
     let headings: [MarkdownParser.Heading]
     let activeHeadingID: String?
+    let documentKey: String
     let onSelect: (MarkdownParser.Heading) -> Void
 
     @State private var collapsedIDs: Set<String> = []
 
     private var tree: [OutlineNode] {
         OutlineTreeBuilder.build(from: headings)
+    }
+
+    private var rootLevel: Int {
+        headings.map(\.level).min() ?? 1
     }
 
     var body: some View {
@@ -32,7 +37,7 @@ struct OutlineView: View {
                     ForEach(tree) { node in
                         OutlineNodeView(
                             node: node,
-                            parentLevel: 0,
+                            rootLevel: rootLevel,
                             activeHeadingID: activeHeadingID,
                             collapsedIDs: $collapsedIDs,
                             onSelect: onSelect
@@ -43,7 +48,7 @@ struct OutlineView: View {
             }
         }
         .frame(minWidth: 200, idealWidth: 250, maxWidth: 350)
-        .onChange(of: headings.map(\.id)) { _, _ in
+        .onChange(of: documentKey) { _, _ in
             collapsedIDs.removeAll()
         }
     }
@@ -119,7 +124,7 @@ private enum OutlineTreeBuilder {
 
 private struct OutlineNodeView: View {
     let node: OutlineNode
-    let parentLevel: Int
+    let rootLevel: Int
     let activeHeadingID: String?
     @Binding var collapsedIDs: Set<String>
     let onSelect: (MarkdownParser.Heading) -> Void
@@ -128,7 +133,7 @@ private struct OutlineNodeView: View {
         if node.children.isEmpty {
             OutlineHeadingRow(
                 heading: node.heading,
-                parentLevel: parentLevel,
+                rootLevel: rootLevel,
                 activeHeadingID: activeHeadingID,
                 onSelect: onSelect
             )
@@ -137,7 +142,7 @@ private struct OutlineNodeView: View {
                 ForEach(node.children) { child in
                     OutlineNodeView(
                         node: child,
-                        parentLevel: node.heading.level,
+                        rootLevel: rootLevel,
                         activeHeadingID: activeHeadingID,
                         collapsedIDs: $collapsedIDs,
                         onSelect: onSelect
@@ -146,7 +151,7 @@ private struct OutlineNodeView: View {
             } label: {
                 OutlineHeadingRow(
                     heading: node.heading,
-                    parentLevel: parentLevel,
+                    rootLevel: rootLevel,
                     activeHeadingID: activeHeadingID,
                     onSelect: onSelect
                 )
@@ -170,25 +175,47 @@ private struct OutlineNodeView: View {
 
 private struct OutlineHeadingRow: View {
     let heading: MarkdownParser.Heading
-    let parentLevel: Int
+    let rootLevel: Int
     let activeHeadingID: String?
     let onSelect: (MarkdownParser.Heading) -> Void
 
     var body: some View {
-        let isActive = heading.anchorID == activeHeadingID
-
-        Text(heading.text)
-            .font(.system(size: 13, weight: isActive ? .semibold : .regular))
+        Text(attributedTitle)
+            .font(.system(size: 13, weight: rowWeight))
             .foregroundStyle(isActive ? Color.accentColor : .primary)
             .padding(.leading, leadingInset)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
+            .listRowInsets(EdgeInsets(top: 2, leading: 0, bottom: 2, trailing: 8))
             .onTapGesture {
                 onSelect(heading)
             }
     }
 
     private var leadingInset: CGFloat {
-        CGFloat(max(0, heading.level - parentLevel - 1)) * 16
+        CGFloat(max(0, heading.level - rootLevel)) * 14
+    }
+
+    private var isActive: Bool {
+        heading.anchorID == activeHeadingID
+    }
+
+    private var rowWeight: Font.Weight {
+        if isActive || heading.level == rootLevel {
+            return .semibold
+        }
+        return .regular
+    }
+
+    private var attributedTitle: AttributedString {
+        let options = AttributedString.MarkdownParsingOptions(
+            interpretedSyntax: .inlineOnlyPreservingWhitespace
+        )
+
+        if let title = try? AttributedString(markdown: heading.markdownText, options: options) {
+            return title
+        }
+
+        return AttributedString(heading.text)
     }
 }

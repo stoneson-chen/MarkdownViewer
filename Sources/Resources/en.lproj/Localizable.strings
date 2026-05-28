@@ -56,12 +56,19 @@
 
 // Toolbar Tooltips
 "toolbar.toggleSidebar" = "Toggle Sidebar";
+"toolbar.openFile.title" = "Open";
 "toolbar.openFile" = "Open File (⌘O)";
+"toolbar.saveFile.title" = "Save";
 "toolbar.saveFile" = "Save File (⌘S)";
 "toolbar.dirtyIndicator" = "Unsaved changes";
+"toolbar.editMode.title" = "Edit";
 "toolbar.editMode" = "Switch to Edit Mode (⌘E)";
+"toolbar.previewMode.title" = "Preview";
 "toolbar.previewMode" = "Switch to Preview Mode (⌘E)";
+"toolbar.toggleSplit.title" = "Split";
 "toolbar.toggleSplit" = "Toggle Split Orientation (⌘\\)";
+"toolbar.typography.title" = "Type";
+"toolbar.export.title" = "Export";
 
 // Common
 "common.error" = "Error";
@@ -159,5 +166,4 @@ A lightweight Markdown viewer built for macOS.
 "export.generate" = "Generate Export File";
 "export.success" = "Export Successful";
 "export.failed" = "Export Failed: ";
-
 

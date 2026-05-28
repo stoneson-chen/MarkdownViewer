@@ -61,4 +61,5 @@ extension Notification.Name {
     
     // MARK: - Export
     static let exportPDFRequest = Notification.Name("exportPDFRequest")
+    static let exportDidFinish = Notification.Name("exportDidFinish")
 }

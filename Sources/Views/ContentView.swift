@@ -39,7 +39,7 @@ struct ContentView: View {
         } detail: {
             detailContent
         }
-        .navigationTitle("")
+        .navigationTitle(viewModel.displayedWindowTitle)
         .background(DocumentEditedWindowSync(
             isEdited: viewModel.isDirty,
             title: viewModel.displayedWindowTitle
@@ -115,7 +115,7 @@ struct ContentView: View {
             .keyboardShortcut("f", modifiers: .control)
             .opacity(0)
         )
-        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("exportDidFinish"))) { notification in
+        .onReceive(NotificationCenter.default.publisher(for: .exportDidFinish)) { notification in
             guard notification.object as? WindowCommandScope === commandScope else { return }
             self.handleExportDidFinish(notification)
         }
@@ -133,7 +133,8 @@ struct ContentView: View {
     private var sidebar: some View {
         OutlineView(
             headings: viewModel.headings,
-            activeHeadingID: viewModel.activeHeadingID
+            activeHeadingID: viewModel.activeHeadingID,
+            documentKey: viewModel.fileURL?.path ?? "__default__"
         ) { heading in
             viewModel.scrollToHeading(heading, scope: commandScope)
         }
@@ -248,21 +249,27 @@ struct ContentView: View {
         Button {
             viewModel.openFilePanel()
         } label: {
-            Image(systemName: "doc.badge.plus")
+            Label(String(localized: "toolbar.openFile.title", bundle: .appResources), systemImage: "doc.badge.plus")
         }
         .help(String(localized: "toolbar.openFile", bundle: .appResources))
 
         Button {
             viewModel.saveFile()
         } label: {
-            Image(systemName: "square.and.arrow.down")
+            Label(String(localized: "toolbar.saveFile.title", bundle: .appResources), systemImage: "square.and.arrow.down")
         }
         .help(String(localized: "toolbar.saveFile", bundle: .appResources))
 
         Button {
             viewModel.toggleEditing()
         } label: {
-            Image(systemName: viewModel.isEditing ? "eye.fill" : "pencil.line")
+            Label(
+                String(
+                    localized: viewModel.isEditing ? "toolbar.previewMode.title" : "toolbar.editMode.title",
+                    bundle: .appResources
+                ),
+                systemImage: viewModel.isEditing ? "eye.fill" : "pencil.line"
+            )
         }
         .help(
             viewModel.isEditing
@@ -274,7 +281,7 @@ struct ContentView: View {
             Button {
                 viewModel.toggleSplitOrientation()
             } label: {
-                Image(systemName: viewModel.splitOrientation.systemImage)
+                Label(String(localized: "toolbar.toggleSplit.title", bundle: .appResources), systemImage: viewModel.splitOrientation.systemImage)
             }
             .help(String(localized: "toolbar.toggleSplit", bundle: .appResources))
         }
@@ -282,7 +289,7 @@ struct ContentView: View {
         Button {
             isTypographyPresented.toggle()
         } label: {
-            Image(systemName: "textformat.size")
+            Label(String(localized: "toolbar.typography.title", bundle: .appResources), systemImage: "textformat.size")
         }
         .help(String(localized: "typography.title", bundle: .appResources))
         .popover(isPresented: $isTypographyPresented, arrowEdge: .bottom) {
@@ -292,17 +299,15 @@ struct ContentView: View {
         Button {
             isExportPresented.toggle()
         } label: {
-            Image(systemName: "square.and.arrow.up")
+            Label(String(localized: "toolbar.export.title", bundle: .appResources), systemImage: "square.and.arrow.up")
         }
         .help(String(localized: "export.title", bundle: .appResources))
             .popover(isPresented: $isExportPresented, arrowEdge: .bottom) {
-                ExportPopoverView(commandScope: commandScope) { format, margin, includeTOC, syntaxHighlight, embedImages, applyCSS in
+                ExportPopoverView(commandScope: commandScope) { format, margin, includeTOC, applyCSS in
                 handleExport(
                     format: format,
                     margin: margin,
                     includeTOC: includeTOC,
-                    syntaxHighlight: syntaxHighlight,
-                    embedImages: embedImages,
                     applyCSS: applyCSS
                 )
             }
@@ -390,12 +395,20 @@ struct ContentView: View {
         viewModel.isSearchPresented = false
     }
 
-    private func handleExport(format: String, margin: Double, includeTOC: Bool, syntaxHighlight: Bool, embedImages: Bool, applyCSS: Bool) {
+    private func handleExport(format: String, margin: Double, includeTOC: Bool, applyCSS: Bool) {
         let savePanel = NSSavePanel()
-        savePanel.allowedContentTypes = format == "pdf" ? [.pdf] : [UTType(filenameExtension: "docx") ?? UTType("org.openxmlformats.wordprocessingml.document")!]
+        if format == "pdf" {
+            savePanel.allowedContentTypes = [.pdf]
+        } else {
+            guard let docxType = DocumentExportService.docxContentType() else {
+                viewModel.errorMessage = String(localized: "export.failed", bundle: .appResources)
+                return
+            }
+            savePanel.allowedContentTypes = [docxType]
+        }
         savePanel.canCreateDirectories = true
         savePanel.nameFieldStringValue = viewModel.fileURL?.deletingPathExtension().lastPathComponent ?? "document"
-        
+
         let window = NSApp.keyWindow ?? NSApp.windows.first
         savePanel.beginSheetModal(for: window ?? NSWindow()) { response in
             if response == .OK, let url = savePanel.url {
@@ -412,120 +425,24 @@ struct ContentView: View {
                 } else {
                     Task { @MainActor in
                         do {
-                            let themeVars = switch UserDefaults.standard.string(forKey: "previewTheme") ?? "light" {
-                            case "dark": PreviewThemes.darkVars
-                            case "sepia": PreviewThemes.sepiaVars
-                            case "ocean": PreviewThemes.oceanVars
-                            default: PreviewThemes.lightVars
-                            }
-                            
-                            let fontFamily = UserDefaults.standard.string(forKey: "editorFontFamily") ?? "SF Pro"
-                            let fontSize = UserDefaults.standard.double(forKey: "editorFontSize")
-                            let editorFontSize = fontSize > 0 ? fontSize : 15.0
-                            let editorLineHeight = UserDefaults.standard.double(forKey: "editorLineHeight") > 0 ? UserDefaults.standard.double(forKey: "editorLineHeight") : 1.6
-                            
-                            let fontFamilyCSS = switch fontFamily {
-                            case "SF Mono": "ui-monospace, monospace"
-                            case "New York": "Georgia, serif"
-                            default: "system-ui, -apple-system, sans-serif"
-                            }
-                            
-                            var rules = themeVars.map { "\($0.key): \($0.value);" }.joined(separator: " ")
-                            rules += " --font-family-base: \(fontFamilyCSS);"
-                            rules += " --font-size-base: \(editorFontSize)px;"
-                            rules += " --line-height-base: \(editorLineHeight);"
-                            
-                            let cssString = applyCSS ? viewModel.previewCSS : ""
-                            let tocTitle = String(localized: "outline.title", bundle: .appResources)
-                            let tocHTML = includeTOC
-                                ? WebPreview.buildExportTOCHTML(headings: viewModel.headings, tocTitle: tocTitle)
-                                : ""
-                            let tocSection = tocHTML.isEmpty
-                                ? ""
-                                : "<nav class=\"export-toc\">\(tocHTML)</nav>"
-
-                            let exportHTML = """
-                            <!DOCTYPE html>
-                            <html>
-                            <head>
-                                <meta charset="utf-8">
-                                <style>
-                                :root { \(rules) }
-                                body {
-                                    font-family: var(--font-family-base) !important;
-                                    font-size: var(--font-size-base) !important;
-                                    line-height: var(--line-height-base) !important;
-                                    color: var(--text-primary) !important;
-                                    background-color: var(--bg-primary) !important;
-                                    padding: 2em;
-                                    max-width: 800px;
-                                    margin: 0 auto;
-                                }
-                                .export-toc {
-                                    margin-bottom: 2em;
-                                    page-break-after: always;
-                                }
-                                .export-toc ul {
-                                    list-style: none;
-                                    padding-left: 0;
-                                    margin: 0;
-                                }
-                                .export-toc li {
-                                    line-height: 1.6;
-                                }
-                                .export-toc a {
-                                    color: inherit;
-                                    text-decoration: none;
-                                }
-                                /* MSO Word 高保真排版引线与边框样式支持 */
-                                blockquote {
-                                    border-left: 3px solid #d2d2d7 !important;
-                                    margin-left: 12pt !important;
-                                    padding-left: 10pt !important;
-                                    color: #6e6e73 !important;
-                                    mso-border-left-alt: 3.0pt solid #d2d2d7 !important;
-                                }
-                                table {
-                                    border-collapse: collapse !important;
-                                    mso-table-lspace: 2.25pt !important;
-                                    mso-table-rspace: 2.25pt !important;
-                                }
-                                th, td {
-                                    border: 1px solid #d2d2d7 !important;
-                                    padding: 6pt !important;
-                                }
-                                \(cssString)
-                                </style>
-                            </head>
-                            <body>
-                                <article class="markdown-body">
-                                \(tocSection)
-                                \(viewModel.renderedHTML)
-                                </article>
-                            </body>
-                            </html>
-                            """
-                            
-                            let htmlData = exportHTML.data(using: .utf8)!
-                            let options: [NSAttributedString.DocumentReadingOptionKey: Any] = [
-                                .documentType: NSAttributedString.DocumentType.html,
-                                .characterEncoding: String.Encoding.utf8.rawValue
-                            ]
-                            let attrStr = try NSAttributedString(data: htmlData, options: options, documentAttributes: nil)
-                            let docxData = try attrStr.data(
-                                from: NSRange(location: 0, length: attrStr.length),
-                                documentAttributes: [.documentType: NSAttributedString.DocumentType.officeOpenXML]
+                            try DocumentExportService.exportDocx(
+                                viewModel: viewModel,
+                                to: url,
+                                options: DocumentExportOptions(
+                                    format: format,
+                                    margin: margin,
+                                    includeTOC: includeTOC,
+                                    applyCSS: applyCSS
+                                )
                             )
-                            try docxData.write(to: url)
-                            
                             NotificationCenter.default.post(
-                                name: Notification.Name("exportDidFinish"),
+                                name: .exportDidFinish,
                                 object: commandScope,
                                 userInfo: ["success": true, "url": url]
                             )
                         } catch {
                             NotificationCenter.default.post(
-                                name: Notification.Name("exportDidFinish"),
+                                name: .exportDidFinish,
                                 object: commandScope,
                                 userInfo: ["success": false, "error": error.localizedDescription]
                             )
@@ -533,7 +450,7 @@ struct ContentView: View {
                     }
                 }
             } else {
-                NotificationCenter.default.post(name: Notification.Name("exportDidFinish"), object: commandScope)
+                NotificationCenter.default.post(name: .exportDidFinish, object: commandScope)
             }
         }
     }
@@ -541,9 +458,7 @@ struct ContentView: View {
     private func handleExportDidFinish(_ notification: Notification) {
         guard let userInfo = notification.userInfo else { return }
         let success = userInfo["success"] as? Bool ?? false
-        
-        // 核心安全机制：使用 DispatchQueue.main.async 将弹窗移至下一个 RunLoop 周期，
-        // 彻底确保 NSSavePanel 的 sheet 已经彻底注销并淡出，完美杜绝模态嵌套死锁导致 AppHang 崩溃！
+
         DispatchQueue.main.async {
             let alert = NSAlert()
             if success {
@@ -557,12 +472,11 @@ struct ContentView: View {
                 alert.informativeText = errorMsg
                 alert.alertStyle = .critical
             } else {
-                return // 用户取消
+                return
             }
-            
+
             alert.addButton(withTitle: String(localized: "common.ok", bundle: .appResources))
-            
-            // 优先采用非阻塞的 sheet 模态，视觉更现代、契合 HIG，且永不死锁；无可用 Window 时安全回退 runModal
+
             if let window = NSApp.keyWindow ?? NSApp.windows.first {
                 alert.beginSheetModal(for: window, completionHandler: nil)
             } else {
@@ -578,20 +492,38 @@ private struct DocumentEditedWindowSync: NSViewRepresentable {
     let title: String
 
     func makeNSView(context: Context) -> NSView {
-        let view = NSView(frame: .zero)
-        syncWindow(for: view)
+        let view = WindowSyncView()
+        view.onWindowChange = { window in
+            syncWindow(window, syncView: view)
+        }
         return view
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
-        syncWindow(for: nsView)
+        syncWindow(nsView.window, syncView: nsView as? WindowSyncView)
     }
 
-    private func syncWindow(for view: NSView) {
+    private func syncWindow(_ window: NSWindow?, syncView: WindowSyncView?) {
         DispatchQueue.main.async {
-            guard let window = view.window else { return }
+            guard let window else { return }
             window.title = title
             window.isDocumentEdited = isEdited
+
+            if syncView?.hasConfiguredToolbarDisplayMode == false,
+               let toolbar = window.toolbar {
+                toolbar.displayMode = .iconAndLabel
+                syncView?.hasConfiguredToolbarDisplayMode = true
+            }
+        }
+    }
+
+    private final class WindowSyncView: NSView {
+        var onWindowChange: ((NSWindow?) -> Void)?
+        var hasConfiguredToolbarDisplayMode = false
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            onWindowChange?(window)
         }
     }
 }

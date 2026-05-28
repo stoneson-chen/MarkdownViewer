@@ -9,6 +9,8 @@
 
 import SwiftUI
 import WebKit
+import Foundation
+import CoreGraphics
 
 /// Renders Markdown as styled HTML in a WKWebView with CSS support.
 struct PreviewView: View {
@@ -97,6 +99,8 @@ struct PreviewThemes {
 // MARK: - WKWebView Wrapper
 
 struct WebPreview: NSViewRepresentable {
+    private static let a4PageSize = CGSize(width: 595.28, height: 841.89)
+
     let viewModel: DocumentViewModel
     let html: String
     let css: String
@@ -212,6 +216,8 @@ struct WebPreview: NSViewRepresentable {
         value
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "'", with: "\\'")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\r", with: "\\r")
     }
 
     static func htmlEscape(_ text: String) -> String {
@@ -222,19 +228,91 @@ struct WebPreview: NSViewRepresentable {
             .replacingOccurrences(of: "\"", with: "&quot;")
     }
 
+    /// Restrict anchor IDs used in export TOC links to safe fragment characters.
+    static func exportSafeAnchorID(_ id: String) -> String {
+        let filtered = id.unicodeScalars.filter {
+            CharacterSet.alphanumerics.contains($0) || $0 == "-" || $0 == "_"
+        }
+        let safe = String(String.UnicodeScalarView(filtered))
+        return safe.isEmpty ? "heading" : safe
+    }
+
+    private static func exportTOCLink(anchorID: String, text: String, indent: Int) -> String {
+        let safeID = exportSafeAnchorID(anchorID)
+        return "<li style=\"padding-left:\(indent)px\"><a href=\"#\(safeID)\">\(htmlEscape(text))</a></li>"
+    }
+
     static func buildExportTOCHTML(headings: [MarkdownParser.Heading], tocTitle: String) -> String {
         guard !headings.isEmpty else { return "" }
         var html = "<h2>\(htmlEscape(tocTitle))</h2><ul>"
         for heading in headings {
             let indent = max(0, heading.level - 1) * 16
-            html += "<li style=\"padding-left:\(indent)px\"><a href=\"#\(heading.anchorID)\">\(htmlEscape(heading.text))</a></li>"
+            html += exportTOCLink(anchorID: heading.anchorID, text: heading.text, indent: indent)
         }
         html += "</ul>"
         return html
     }
 
-    static func jsPreparePDFExport(margin: Double, tocInnerHTML: String) -> String {
+    static func buildExportTOCHTML(headings: [MarkdownParser.Heading], fallbackHTML: String, tocTitle: String) -> String {
+        let headingTOC = buildExportTOCHTML(headings: headings, tocTitle: tocTitle)
+        if !headingTOC.isEmpty { return headingTOC }
+        return buildExportTOCHTML(fromHTML: fallbackHTML, tocTitle: tocTitle)
+    }
+
+    private static func buildExportTOCHTML(fromHTML html: String, tocTitle: String) -> String {
+        let pattern = #"<h([1-6])\b([^>]*)>(.*?)</h\1>"#
+        let idPattern = #"id="([^"]+)""#
+        let tagPattern = #"<[^>]+>"#
+        guard let headingRegex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .dotMatchesLineSeparators]),
+              let idRegex = try? NSRegularExpression(pattern: idPattern, options: [.caseInsensitive]),
+              let tagRegex = try? NSRegularExpression(pattern: tagPattern, options: [.caseInsensitive]) else {
+            return ""
+        }
+
+        let range = NSRange(html.startIndex..., in: html)
+        let matches = headingRegex.matches(in: html, range: range)
+        guard !matches.isEmpty else { return "" }
+
+        var result = "<h2>\(htmlEscape(tocTitle))</h2><ul>"
+        for (index, match) in matches.enumerated() {
+            guard let levelRange = Range(match.range(at: 1), in: html),
+                  let attributesRange = Range(match.range(at: 2), in: html),
+                  let innerRange = Range(match.range(at: 3), in: html) else { continue }
+
+            let level = Int(html[levelRange]) ?? 1
+            let attributes = String(html[attributesRange])
+            let idMatch = idRegex.firstMatch(in: attributes, range: NSRange(attributes.startIndex..., in: attributes))
+            let anchorID: String
+            if let idMatch, let idRange = Range(idMatch.range(at: 1), in: attributes) {
+                anchorID = String(attributes[idRange])
+            } else {
+                anchorID = "export-heading-\(index)"
+            }
+
+            let rawInner = String(html[innerRange])
+            let plainRange = NSRange(rawInner.startIndex..., in: rawInner)
+            let plainText = tagRegex.stringByReplacingMatches(in: rawInner, range: plainRange, withTemplate: "")
+            let indent = max(0, level - 1) * 16
+            result += exportTOCLink(anchorID: anchorID, text: htmlDecoded(plainText), indent: indent)
+        }
+        result += "</ul>"
+        return result
+    }
+
+    private static func htmlDecoded(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "&lt;", with: "<")
+            .replacingOccurrences(of: "&gt;", with: ">")
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&#39;", with: "'")
+            .replacingOccurrences(of: "&amp;", with: "&")
+    }
+
+    static func jsPreparePDFExport(margin: Double, tocInnerHTML: String, tocTitle: String) -> String {
         let tocLiteral = tocInnerHTML.isEmpty ? "null" : "'\(jsStringLiteral(tocInnerHTML))'"
+        let tocTitleLiteral = "'\(jsStringLiteral(tocTitle))'"
+        let pageWidth = a4PageSize.width
+        let contentWidth = max(1, pageWidth - margin * 2)
         return """
         (function() {
             document.getElementById('pdf-export-style')?.remove();
@@ -243,27 +321,60 @@ struct WebPreview: NSViewRepresentable {
 
             const style = document.createElement('style');
             style.id = 'pdf-export-style';
-            style.textContent = '@media print { \
+            style.textContent = 'html.pdf-exporting, html.pdf-exporting body { width: \(pageWidth)px !important; min-width: \(pageWidth)px !important; height: auto !important; margin: 0 !important; padding: 0 !important; overflow: visible !important; background: #ffffff !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; } \
+                html.pdf-exporting #content, html.pdf-exporting .markdown-body { box-sizing: border-box !important; width: \(pageWidth)px !important; max-width: \(pageWidth)px !important; min-height: 100vh !important; margin: 0 !important; padding: \(margin)px !important; } \
+                html.pdf-exporting #content > * { max-width: \(contentWidth)px !important; } \
+                @media print { \
                 @page { size: A4; margin: \(margin)pt; } \
                 html, body { height: auto !important; overflow: visible !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; } \
                 #content, .markdown-body { max-width: none !important; width: auto !important; margin: 0 !important; padding: 0 !important; } \
                 pre, blockquote, table, figure, img, .mermaid { break-inside: avoid-page; page-break-inside: avoid; } \
                 h1, h2, h3, h4, h5, h6 { break-after: avoid-page; page-break-after: avoid; } \
-                .pdf-export-toc { break-after: page; page-break-after: always; margin-bottom: 2em; } \
-                .pdf-export-toc ul { list-style: none; padding-left: 0; margin: 0; } \
-                .pdf-export-toc li { line-height: 1.6; } \
-                .pdf-export-toc a { color: inherit; text-decoration: none; } \
+                .export-toc { break-after: page; page-break-after: always; margin-bottom: 2em; } \
+                .export-toc ul { list-style: none; padding-left: 0; margin: 0; } \
+                .export-toc li { line-height: 1.6; } \
+                .export-toc a { color: inherit; text-decoration: none; } \
             }';
             document.head.appendChild(style);
+            document.documentElement.classList.add('pdf-exporting');
 
-            const tocHTML = \(tocLiteral);
+            const escapeHTML = function(value) {
+                return String(value).replace(/[&<>"']/g, function(ch) {
+                    return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch];
+                });
+            };
+            const buildTOCFromDOM = function(container) {
+                const headings = Array.from(container.querySelectorAll('h1, h2, h3, h4, h5, h6'))
+                    .filter(function(heading) { return heading.textContent.trim().length > 0; });
+                if (headings.length === 0) return '';
+                let html = '<h2>' + escapeHTML(\(tocTitleLiteral)) + '</h2><ul>';
+                headings.forEach(function(heading, index) {
+                    if (!heading.id) heading.id = 'export-heading-' + index;
+                    const level = Math.max(1, Math.min(6, Number(heading.tagName.substring(1)) || 1));
+                    const indent = Math.max(0, level - 1) * 16;
+                    html += '<li style="padding-left:' + indent + 'px"><a href="#' + escapeHTML(heading.id) + '">' + escapeHTML(heading.textContent.trim()) + '</a></li>';
+                });
+                html += '</ul>';
+                return html;
+            };
+            let tocHTML = \(tocLiteral);
             if (tocHTML) {
                 const container = document.getElementById('content');
                 if (container) {
                     const nav = document.createElement('nav');
                     nav.id = 'pdf-export-toc';
-                    nav.className = 'pdf-export-toc';
+                    nav.className = 'export-toc';
                     nav.innerHTML = tocHTML;
+                    container.prepend(nav);
+                }
+            } else {
+                const container = document.getElementById('content');
+                const generatedTOC = container ? buildTOCFromDOM(container) : '';
+                if (generatedTOC) {
+                    const nav = document.createElement('nav');
+                    nav.id = 'pdf-export-toc';
+                    nav.className = 'export-toc';
+                    nav.innerHTML = generatedTOC;
                     container.prepend(nav);
                 }
             }
@@ -277,13 +388,74 @@ struct WebPreview: NSViewRepresentable {
             document.getElementById('pdf-export-style')?.remove();
             document.getElementById('pdf-export-toc')?.remove();
             document.getElementById('pdf-margin-style')?.remove();
+            document.documentElement.classList.remove('pdf-exporting');
         })();
         """
     }
 
-    static func a4PDFConfiguration() -> WKPDFConfiguration {
+    /// Wait for images, fonts, and optional Mermaid before measuring PDF page count.
+    static func jsWaitForExportReady() -> String {
+        """
+        (function() {
+            return new Promise(function(resolve) {
+                var settled = false;
+                function finish() {
+                    if (settled) return;
+                    settled = true;
+                    resolve(true);
+                }
+                function layoutReady() {
+                    var images = Array.from(document.images || []);
+                    var pending = images.filter(function(img) { return !img.complete; });
+                    if (pending.length > 0) {
+                        var left = pending.length;
+                        pending.forEach(function(img) {
+                            img.addEventListener('load', function() { if (--left <= 0) finish(); });
+                            img.addEventListener('error', function() { if (--left <= 0) finish(); });
+                        });
+                        return;
+                    }
+                    finish();
+                }
+                if (typeof mermaid !== 'undefined' && document.querySelector('.mermaid')) {
+                    mermaid.run({ suppressErrors: true }).then(layoutReady).catch(layoutReady);
+                } else {
+                    layoutReady();
+                }
+                setTimeout(finish, 4000);
+            });
+        })();
+        """
+    }
+
+    static func waitForExportLayout(in webView: WKWebView) async {
+        _ = try? await webView.evaluateJavaScript(jsWaitForExportReady())
+    }
+
+    static func pdfPageCount(for webView: WKWebView, margin: Double) async throws -> Int {
+        let sizeScript = """
+        (function() {
+            const content = document.getElementById('content');
+            if (content) return Math.max(content.scrollHeight, content.offsetHeight);
+            return Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
+        })();
+        """
+        let contentHeight = try await webView.evaluateJavaScript(sizeScript) as? Double
+        let drawableHeight = max(1, a4PageSize.height - margin * 2)
+        let height = max((contentHeight ?? a4PageSize.height) - margin * 2, drawableHeight)
+        return max(1, Int(ceil(height / drawableHeight)))
+    }
+
+    static func pdfConfiguration(pageIndex: Int, margin: Double) -> WKPDFConfiguration {
+        let drawableWidth = max(1, a4PageSize.width - margin * 2)
+        let drawableHeight = max(1, a4PageSize.height - margin * 2)
         let config = WKPDFConfiguration()
-        config.rect = CGRect(x: 0, y: 0, width: 595.28, height: 841.89)
+        config.rect = CGRect(
+            x: margin,
+            y: margin + CGFloat(pageIndex) * drawableHeight,
+            width: drawableWidth,
+            height: drawableHeight
+        )
         return config
     }
 
@@ -311,9 +483,7 @@ struct WebPreview: NSViewRepresentable {
             <style>
             \(css)
             html { scroll-behavior: smooth; }
-            body {
-                padding-top: 72px !important;
-            }
+            .markdown-body > :first-child { margin-top: 0 !important; }
 
             /* Syntax Highlighting */
             .hl-keyword  { color: #d73a49; font-weight: 600; }
@@ -714,6 +884,24 @@ struct WebPreview: NSViewRepresentable {
         private var isPageReady = false
         private var scrollApplyTask: Task<Void, Never>?
         private var lastAppliedLiveScrollPercent: Double = -1
+        private var isExportingPDF = false
+
+        private enum PDFExportError: LocalizedError {
+            case exportInProgress
+            case webViewUnavailable
+            case emptyData
+
+            var errorDescription: String? {
+                switch self {
+                case .exportInProgress:
+                    return "PDF 导出正在进行，请稍后再试。"
+                case .webViewUnavailable:
+                    return "预览视图尚未准备好，无法导出 PDF。"
+                case .emptyData:
+                    return "PDF 生成结果为空。"
+                }
+            }
+        }
 
         /// Load preview HTML. Local images are inlined as data URLs in `DocumentViewModel`; `baseURL` resolves other relative links.
         func loadPreview(html: String, in webView: WKWebView, baseURL: URL?) {
@@ -800,59 +988,106 @@ struct WebPreview: NSViewRepresentable {
                 let includeTOC = userInfo["includeTOC"] as? Bool ?? false
 
                 Task { @MainActor in
-                    guard let self = self, let webView = self.webView else { return }
+                    guard let self = self else { return }
                     do {
-                        let tocTitle = String(localized: "outline.title", bundle: .appResources)
-                        let tocHTML = includeTOC
-                            ? WebPreview.buildExportTOCHTML(headings: self.viewModel?.headings ?? [], tocTitle: tocTitle)
-                            : ""
-
-                        _ = try await webView.evaluateJavaScript(
-                            WebPreview.jsPreparePDFExport(margin: margin, tocInnerHTML: tocHTML)
-                        )
-
-                        // 1. 初始化 macOS 物理打印配置，使用独立实例避免影响系统全局设置
-                        let printInfo = NSPrintInfo()
-                        printInfo.paperSize = NSSize(width: 595.28, height: 841.89) // A4 纸张标准尺寸
-                        printInfo.orientation = .portrait
-                        printInfo.horizontalPagination = .fit
-                        printInfo.verticalPagination = .automatic
-                        
-                        // 2. 将系统打印外边距设为 0，使导出的 PDF 完全受 @media print CSS 边距控制
-                        printInfo.leftMargin = 0
-                        printInfo.rightMargin = 0
-                        printInfo.topMargin = 0
-                        printInfo.bottomMargin = 0
-                        
-                        // 3. 将打印任务指定为“直接静默保存文件”，并挂载目标 PDF 的本地保存 URL
-                        printInfo.jobDisposition = .save
-                        printInfo.dictionary()[NSPrintInfo.AttributeKey.jobSavingURL] = url as NSURL
-                        
-                        // 4. 从 WebKit 提取打印操作并开启进度面板以驱动模态 RunLoop，彻底消除 WebKit 跨进程 IPC 死锁
-                        let printOperation = webView.printOperation(with: printInfo)
-                        printOperation.showsPrintPanel = false
-                        printOperation.showsProgressPanel = true // 必须为 true 确保主线程 RunLoop 自动泵送
-                        
-                        // 5. 在主线程同步执行打印，网页将自动按照 CSS page-break 规则完美进行物理分页输出
-                        printOperation.run()
-
-                        _ = try? await webView.evaluateJavaScript(WebPreview.jsCleanupPDFExport())
-
+                        try await self.exportPDF(to: url, margin: margin, includeTOC: includeTOC)
                         NotificationCenter.default.post(
-                            name: Notification.Name("exportDidFinish"),
+                            name: .exportDidFinish,
                             object: self.commandScope,
                             userInfo: ["success": true, "url": url]
                         )
                     } catch {
-                        _ = try? await webView.evaluateJavaScript(WebPreview.jsCleanupPDFExport())
                         NotificationCenter.default.post(
-                            name: Notification.Name("exportDidFinish"),
+                            name: .exportDidFinish,
                             object: self.commandScope,
                             userInfo: ["success": false, "error": error.localizedDescription]
                         )
                     }
                 }
             }
+        }
+
+        @MainActor
+        private func exportPDF(to url: URL, margin: Double, includeTOC: Bool) async throws {
+            guard !isExportingPDF else { throw PDFExportError.exportInProgress }
+            guard let webView else { throw PDFExportError.webViewUnavailable }
+
+            isExportingPDF = true
+            defer { isExportingPDF = false }
+
+            do {
+                let tocTitle = String(localized: "outline.title", bundle: .appResources)
+                let tocHTML = includeTOC
+                    ? WebPreview.buildExportTOCHTML(
+                        headings: viewModel?.headings ?? [],
+                        fallbackHTML: viewModel?.renderedHTML ?? "",
+                        tocTitle: tocTitle
+                    )
+                    : ""
+
+                _ = try await webView.evaluateJavaScript(
+                    WebPreview.jsPreparePDFExport(margin: margin, tocInnerHTML: tocHTML, tocTitle: tocTitle)
+                )
+                await WebPreview.waitForExportLayout(in: webView)
+
+                let pageCount = try await WebPreview.pdfPageCount(for: webView, margin: margin)
+                let pdfData = try await createPaginatedPDFData(from: webView, pageCount: pageCount, margin: margin)
+                guard !pdfData.isEmpty else { throw PDFExportError.emptyData }
+
+                try await Task.detached(priority: .userInitiated) {
+                    try pdfData.write(to: url, options: .atomic)
+                }.value
+
+                _ = try? await webView.evaluateJavaScript(WebPreview.jsCleanupPDFExport())
+            } catch {
+                _ = try? await webView.evaluateJavaScript(WebPreview.jsCleanupPDFExport())
+                throw error
+            }
+        }
+
+        @MainActor
+        private func createPDFData(from webView: WKWebView, configuration: WKPDFConfiguration) async throws -> Data {
+            try await withCheckedThrowingContinuation { continuation in
+                webView.createPDF(configuration: configuration) { result in
+                    continuation.resume(with: result)
+                }
+            }
+        }
+
+        @MainActor
+        private func createPaginatedPDFData(from webView: WKWebView, pageCount: Int, margin: Double) async throws -> Data {
+            let outputData = NSMutableData()
+            var mediaBox = CGRect(origin: .zero, size: WebPreview.a4PageSize)
+            guard let consumer = CGDataConsumer(data: outputData as CFMutableData),
+                  let context = CGContext(consumer: consumer, mediaBox: &mediaBox, nil) else {
+                throw PDFExportError.emptyData
+            }
+
+            for pageIndex in 0..<pageCount {
+                let configuration = WebPreview.pdfConfiguration(pageIndex: pageIndex, margin: margin)
+                let pageData = try await createPDFData(from: webView, configuration: configuration)
+                guard let provider = CGDataProvider(data: pageData as CFData),
+                      let document = CGPDFDocument(provider),
+                      let page = document.page(at: 1) else {
+                    throw PDFExportError.emptyData
+                }
+
+                context.beginPDFPage(nil)
+                context.setFillColor(NSColor.white.cgColor)
+                context.fill(mediaBox)
+                context.saveGState()
+                context.translateBy(x: margin, y: margin)
+                context.drawPDFPage(page)
+                context.restoreGState()
+                context.endPDFPage()
+            }
+
+            context.closePDF()
+            let data = outputData as Data
+            guard !data.isEmpty else {
+                throw PDFExportError.emptyData
+            }
+            return data
         }
 
         func applyScrollCommandIfNeeded(_ command: ScrollSyncCommand, in webView: WKWebView) {

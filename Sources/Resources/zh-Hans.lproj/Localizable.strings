@@ -56,12 +56,19 @@
 
 // Toolbar Tooltips
 "toolbar.toggleSidebar" = "切换侧边栏";
+"toolbar.openFile.title" = "打开";
 "toolbar.openFile" = "打开文件 (⌘O)";
+"toolbar.saveFile.title" = "保存";
 "toolbar.saveFile" = "保存文件 (⌘S)";
 "toolbar.dirtyIndicator" = "有未保存的更改";
+"toolbar.editMode.title" = "编辑";
 "toolbar.editMode" = "切换到编辑模式 (⌘E)";
+"toolbar.previewMode.title" = "预览";
 "toolbar.previewMode" = "切换到预览模式 (⌘E)";
+"toolbar.toggleSplit.title" = "分栏";
 "toolbar.toggleSplit" = "切换分栏方向 (⌘\\)";
+"toolbar.typography.title" = "排版";
+"toolbar.export.title" = "导出";
 
 // Common
 "common.error" = "错误";
@@ -159,5 +166,4 @@
 "export.generate" = "生成并导出文档";
 "export.success" = "导出成功";
 "export.failed" = "导出失败：";
-
 
